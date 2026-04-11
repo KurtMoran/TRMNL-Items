@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #888;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+      color: #000;
+    }
+    .screen {
+      width: 800px;
+      height: 480px;
+      background: #fff;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+      display: flex;
+      flex-direction: column;
+    }
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 20px 24px 12px;
+    }
+    .stats-grid {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .stat-box {
+      flex: 1;
+      border: 2px solid #000;
+      border-radius: 10px;
+      padding: 10px 12px;
+      text-align: center;
+    }
+    .stat-box .big-num {
+      font-size: 52px;
+      font-weight: bold;
+      line-height: 1;
+    }
+    .stat-box .stat-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 2px;
+    }
+    .section-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-bottom: 2px solid #000;
+      padding-bottom: 4px;
+      margin-bottom: 8px;
+      font-weight: bold;
+    }
+    .two-col {
+      display: flex;
+      gap: 28px;
+      flex: 1;
+    }
+    .col-types {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    .col-hourly {
+      flex: 1.5;
+      display: flex;
+      flex-direction: column;
+    }
+    .type-rows {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .type-row {
+      display: flex;
+      align-items: center;
+      font-size: 13px;
+      padding: 0;
+    }
+    .type-row .ac-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .type-row .ac-count { font-weight: bold; text-align: right; width: 28px; margin-right: 10px; }
+    .type-row .ac-bar {
+      height: 12px;
+      background: #000;
+      border-radius: 2px;
+    }
+    .hour-rows {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .hour-row {
+      display: flex;
+      align-items: center;
+      font-size: 14px;
+      gap: 8px;
+    }
+    .hour-row .hour-label {
+      flex: 0 0 36px;
+      text-align: right;
+      font-size: 13px;
+    }
+    .hour-row .hour-bar-wrap {
+      flex: 1;
+      height: 18px;
+      display: flex;
+    }
+    .hour-row .hour-bar-arr {
+      height: 18px;
+      background: #000;
+    }
+    .hour-row .hour-bar-dep {
+      height: 18px;
+      background: repeating-linear-gradient(
+        -45deg,
+        #000,
+        #000 2px,
+        #fff 2px,
+        #fff 5px
+      );
+    }
+    .hour-row .hour-bar-arr:first-child {
+      border-radius: 3px 0 0 3px;
+    }
+    .hour-row .hour-bar-dep:last-child {
+      border-radius: 0 3px 3px 0;
+    }
+    .hour-row .hour-count {
+      flex: 0 0 22px;
+      font-size: 13px;
+      font-weight: bold;
+      text-align: right;
+    }
+    .legend {
+      display: flex;
+      gap: 16px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 6px;
+      justify-content: flex-end;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      display: inline-block;
+      border-radius: 2px;
+    }
+    .footer {
+      border-top: 1px solid #ccc;
+      padding: 8px 24px;
+      display: flex;
+      align-items: center;
+      font-size: 13px;
+    }
+    .footer .title {
+      font-weight: bold;
+    }
+    .footer .meta {
+      margin-left: 12px;
+      opacity: 0.5;
+    }
+    .footer .weather {
+      margin-left: auto;
+      font-weight: bold;
+      font-size: 14px;
+    }
+    .footer .weather .lo {
+      opacity: 0.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="screen">
+    <div class="main">
+
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="big-num">47</div>
+          <div class="stat-label">Operations Today</div>
+        </div>
+        <div class="stat-box">
+          <div class="big-num">26</div>
+          <div class="stat-label">Arrivals</div>
+        </div>
+        <div class="stat-box">
+          <div class="big-num">21</div>
+          <div class="stat-label">Departures</div>
+        </div>
+        <div class="stat-box">
+          <div class="big-num">9</div>
+          <div class="stat-label">Peak Hour (10am)</div>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="col-types">
+          <div class="section-label">Top Aircraft Types</div>
+          <div class="type-rows">
+            <div class="type-row">
+              <span class="ac-name">Cessna 172</span>
+              <span class="ac-count">14</span>
+              <span class="ac-bar" style="width: 98px;"></span>
+            </div>
+            <div class="type-row">
+              <span class="ac-name">Piper Cherokee</span>
+              <span class="ac-count">8</span>
+              <span class="ac-bar" style="width: 56px;"></span>
+            </div>
+            <div class="type-row">
+              <span class="ac-name">Cessna 182</span>
+              <span class="ac-count">5</span>
+              <span class="ac-bar" style="width: 35px;"></span>
+            </div>
+            <div class="type-row">
+              <span class="ac-name">Cirrus SR22</span>
+              <span class="ac-count">4</span>
+              <span class="ac-bar" style="width: 28px;"></span>
+            </div>
+            <div class="type-row">
+              <span class="ac-name">Beech Bonanza</span>
+              <span class="ac-count">3</span>
+              <span class="ac-bar" style="width: 21px;"></span>
+            </div>
+            <div class="type-row">
+              <span class="ac-name">Robinson R44</span>
+              <span class="ac-count">2</span>
+              <span class="ac-bar" style="width: 14px;"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-hourly">
+          <div class="section-label">Hourly Activity</div>
+          <div class="hour-rows">
+            <div class="hour-row">
+              <span class="hour-label">7am</span>
+              <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: 66px;"></span><span class="hour-bar-dep" style="width: 33px;"></span></span>
+              <span class="hour-count">3</span>
+            </div>
+            <div class="hour-row">
+              <span class="hour-label">8am</span>
+              <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: 133px;"></span><span class="hour-bar-dep" style="width: 66px;"></span></span>
+              <span class="hour-count">6</span>
+            </div>
+            <div class="hour-row">
+              <span class="hour-label">9am</span>
+              <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: 100px;"></span><span class="hour-bar-dep" style="width: 100px;"></span></span>
+              <span class="hour-count">6</span>
+            </div>
+            <div class="hour-row">
+              <span class="hour-label">10am</span>
+              <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: 200px;"></span><span class="hour-bar-dep" style="width: 100px;"></span></span>
+              <span class="hour-count">9</span>
+            </div>
+            <div class="hour-row">
+              <span class="hour-label">11am</span>
+              <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: 133px;"></span><span class="hour-bar-dep" style="width: 100px;"></span></span>
+              <span class="hour-count">7</span>
+            </div>
+            <div class="hour-row">
+              <span class="hour-label">12pm</span>
+              <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: 100px;"></span><span class="hour-bar-dep" style="width: 66px;"></span></span>
+              <span class="hour-count">5</span>
+            </div>
+            <div class="hour-row">
+              <span class="hour-label">1pm</span>
+              <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: 100px;"></span><span class="hour-bar-dep" style="width: 66px;"></span></span>
+              <span class="hour-count">5</span>
+            </div>
+            <div class="hour-row">
+              <span class="hour-label">2pm</span>
+              <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: 100px;"></span><span class="hour-bar-dep" style="width: 33px;"></span></span>
+              <span class="hour-count">4</span>
+            </div>
+            <div class="hour-row">
+              <span class="hour-label">3pm</span>
+              <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: 33px;"></span><span class="hour-bar-dep" style="width: 33px;"></span></span>
+              <span class="hour-count">2</span>
+            </div>
+          </div>
+          <div class="legend">
+            <span class="legend-item"><span class="legend-swatch" style="background:#000;"></span> Arrivals</span>
+            <span class="legend-item"><span class="legend-swatch" style="background:repeating-linear-gradient(-45deg,#000,#000 2px,#fff 2px,#fff 5px);"></span> Departures</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="footer">
+      <span class="title">KMYF Airport Tracker</span>
+      <span class="meta">Saturday, April 11 &bull; Updated 2:35 PM</span>
+      <span class="weather">72&deg; / <span class="lo">58&deg;</span></span>
+    </div>
+  </div>
+</body>
+</html>
