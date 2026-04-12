@@ -230,7 +230,6 @@ async def get_trending_reason(session, article_name, mult):
     ).format(article_name.replace("_", " "), mult)
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "tools": [{"google_search": {}}],
         "generationConfig": {"maxOutputTokens": 80, "temperature": 0.2},
     }
     try:
