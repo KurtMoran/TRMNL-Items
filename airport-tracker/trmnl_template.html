@@ -6,11 +6,13 @@
     background: #fff;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
     font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
     color: #000;
   }
   .main {
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     padding: 20px 24px 12px;
@@ -19,6 +21,7 @@
     display: flex;
     gap: 12px;
     margin-bottom: 18px;
+    flex-shrink: 0;
   }
   .stat-box {
     flex: 1;
@@ -44,26 +47,31 @@
     letter-spacing: 1px;
     border-bottom: 2px solid #000;
     padding-bottom: 4px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
     font-weight: bold;
+    flex-shrink: 0;
   }
   .two-col {
     display: flex;
     gap: 28px;
     flex: 1;
+    min-height: 0;
   }
   .col-types {
     flex: 1;
     display: flex;
     flex-direction: column;
+    min-height: 0;
   }
   .col-hourly {
     flex: 1.5;
     display: flex;
     flex-direction: column;
+    min-height: 0;
   }
   .type-rows {
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -83,6 +91,7 @@
   }
   .hour-rows {
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -90,27 +99,27 @@
   .hour-row {
     display: flex;
     align-items: center;
-    font-size: 14px;
-    gap: 8px;
+    font-size: 12px;
+    gap: 6px;
   }
   .hour-row .hour-label {
-    flex: 0 0 36px;
+    flex: 0 0 32px;
     text-align: right;
-    font-size: 13px;
+    font-size: 11px;
   }
   .hour-row .hour-bar-wrap {
     flex: 1;
-    height: 18px;
+    height: 12px;
     display: flex;
     overflow: hidden;
   }
   .hour-row .hour-bar-arr {
-    height: 18px;
+    height: 12px;
     background: #000;
     border-radius: 3px 0 0 3px;
   }
   .hour-row .hour-bar-dep {
-    height: 18px;
+    height: 12px;
     background: repeating-linear-gradient(
       -45deg,
       #000,
@@ -122,18 +131,19 @@
   }
   .hour-row .hour-count {
     flex: 0 0 22px;
-    font-size: 13px;
+    font-size: 11px;
     font-weight: bold;
     text-align: right;
   }
   .legend {
     display: flex;
     gap: 16px;
-    font-size: 10px;
+    font-size: 9px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    margin-top: 6px;
+    margin-top: 4px;
     justify-content: flex-end;
+    flex-shrink: 0;
   }
   .legend-item {
     display: flex;
@@ -141,17 +151,18 @@
     gap: 4px;
   }
   .legend-swatch {
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
     display: inline-block;
     border-radius: 2px;
   }
   .footer {
     border-top: 1px solid #ccc;
-    padding: 8px 24px;
+    padding: 6px 24px;
     display: flex;
     align-items: center;
-    font-size: 13px;
+    font-size: 11px;
+    flex-shrink: 0;
   }
   .footer .title {
     font-weight: bold;
@@ -163,7 +174,7 @@
   .footer .weather {
     margin-left: auto;
     font-weight: bold;
-    font-size: 14px;
+    font-size: 12px;
   }
   .footer .weather .lo-temp {
     opacity: 0.5;
