@@ -22,7 +22,7 @@ log = logging.getLogger("wiki-trending")
 # Configuration
 PAGES_TO_CHECK = 200
 TRENDING_THRESHOLD = 3.0
-DISPLAY_COUNT = 6
+DISPLAY_COUNT = 5
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "14400"))  # 4 hours
 TRMNL_WEBHOOK_UUID = os.getenv("TRMNL_WEBHOOK_UUID", "")
 TRMNL_API_URL = "https://trmnl.com/api/custom_plugins"
@@ -172,6 +172,8 @@ async def process_article(session, article_name, current_views):
             "views": current_views,
             "avg": int(avg),
             "mult": round(multiplier, 1),
+            "wiki_desc": description,
+            "news_headline": headline,
             "desc": headline if headline else description,
         }
     return None
@@ -216,18 +218,36 @@ async def fetch_trending():
         return trending
 
 
-async def get_trending_reason(session, article_name, mult):
+async def get_trending_reason(session, article_name, mult, wiki_desc="", news_headline=""):
     """Ask Gemini with Google Search grounding why an article is trending."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
         "models/gemini-2.5-flash:generateContent?key={}"
     ).format(GEMINI_API_KEY)
+    name = article_name.replace("_", " ")
+    context_parts = []
+    if wiki_desc:
+        context_parts.append("Wikipedia intro: {}".format(wiki_desc[:300]))
+    if news_headline:
+        context_parts.append("Recent headline: {}".format(news_headline))
+    context = "\n".join(context_parts)
     prompt = (
-        "The Wikipedia article '{}' is getting {}x its normal daily traffic. "
-        "In one short sentence (under 120 characters), explain why it's trending right now. "
-        "Be specific about the event or news. "
-        "Don't start with 'The Wikipedia article'. Just state what happened."
-    ).format(article_name.replace("_", " "), mult)
+        "You are writing one-line descriptions for an e-ink display that shows "
+        "Wikipedia articles with unusual traffic spikes.\n\n"
+        "Article: {name}\n"
+        "Traffic spike: {mult}x normal\n"
+        "{context}\n\n"
+        "Write ONE sentence explaining the specific event causing the spike. "
+        "Use your web search to find out what happened.\n\n"
+        "Rules:\n"
+        "- State the event directly. Good: 'Scored his first Anfield goal for Liverpool against Fulham at age 16.'\n"
+        "- Do NOT start with the article name — the reader already sees it on screen.\n"
+        "- Do NOT say 'is trending', 'went viral', 'the Wikipedia article', or 'the article'.\n"
+        "- Do NOT explain that traffic spiked — the reader already knows.\n"
+        "- Be specific: include names, dates, scores, outcomes when relevant.\n"
+        "- Keep it under 150 characters if possible.\n"
+        "- If you truly cannot determine why, write a one-sentence summary of what this topic is."
+    ).format(name=name, mult=mult, context=context)
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "tools": [{"google_search": {}}],
@@ -260,7 +280,11 @@ async def enrich_with_reasons(trending):
     top = trending[:DISPLAY_COUNT]
     async with aiohttp.ClientSession() as session:
         for article in top:
-            reason = await get_trending_reason(session, article["article"], article["mult"])
+            reason = await get_trending_reason(
+                session, article["article"], article["mult"],
+                wiki_desc=article.get("wiki_desc", ""),
+                news_headline=article.get("news_headline", ""),
+            )
             if reason:
                 log.info("Gemini: %s -> %s", article["article"], reason)
                 article["desc"] = reason
