@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -189,12 +190,42 @@ async def get_news_headline(session, article):
     return ""
 
 
+async def get_recent_edits(session, article):
+    """Fetch recent edit summaries for an article."""
+    url = "https://en.wikipedia.org/w/api.php"
+    params = {
+        "action": "query", "format": "json", "prop": "revisions",
+        "titles": article, "rvlimit": "10", "rvprop": "comment|timestamp",
+    }
+    try:
+        async with session.get(url, params=params, headers={"User-Agent": USER_AGENT}) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                page = next(iter(data["query"]["pages"].values()))
+                revisions = page.get("revisions", [])
+                if not revisions:
+                    return ""
+                # Count recent edits (last 2 days)
+                cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+                recent = [r for r in revisions if r.get("timestamp", "") >= cutoff]
+                comments = [r.get("comment", "") for r in recent if r.get("comment")]
+                if recent:
+                    summary = "{} edits in last 2 days".format(len(recent))
+                    if comments:
+                        summary += ". Edit notes: " + "; ".join(comments[:3])
+                    return summary
+    except Exception as e:
+        log.debug("Edit history fetch failed for %s: %s", article, e)
+    return ""
+
+
 async def process_article(session, article_name, current_views):
     views_task = get_article_views(session, article_name)
     desc_task = get_description(session, article_name)
     news_task = get_news_headline(session, article_name)
-    historical, description, headline = await asyncio.gather(
-        views_task, desc_task, news_task,
+    edits_task = get_recent_edits(session, article_name)
+    historical, description, headline, edits = await asyncio.gather(
+        views_task, desc_task, news_task, edits_task,
     )
 
     if not historical or len(historical) <= 1:
@@ -214,6 +245,7 @@ async def process_article(session, article_name, current_views):
             "mult": round(multiplier, 1),
             "wiki_desc": description,
             "news_headline": headline,
+            "recent_edits": edits,
             "desc": headline if headline else description,
         }
     return None
@@ -271,7 +303,7 @@ async def fetch_trending():
 
 
 async def get_trending_reason(session, article_name, mult, wiki_desc="",
-                              news_headline="", wiki_feature=""):
+                              news_headline="", wiki_feature="", recent_edits=""):
     """Ask Gemini with Google Search grounding why an article is trending."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
@@ -285,6 +317,8 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
         context_parts.append("Wikipedia intro: {}".format(wiki_desc[:300]))
     if news_headline:
         context_parts.append("Recent headline: {}".format(news_headline))
+    if recent_edits:
+        context_parts.append("Recent Wikipedia edits: {}".format(recent_edits[:300]))
     context = "\n".join(context_parts)
     prompt = (
         "You are writing one-line descriptions for an e-ink display that shows "
@@ -333,7 +367,11 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
                     parts = candidates[0].get("content", {}).get("parts", [])
                     for part in parts:
                         if "text" in part:
-                            return part["text"].strip()
+                            text = part["text"].strip()
+                            # Remove Gemini citations like [cite: 1, 2] or [1]
+                            text = re.sub(r'\s*\[cite:[^\]]*\]', '', text)
+                            text = re.sub(r'\s*\[\d+(?:,\s*\d+)*\]', '', text)
+                            return text.strip()
                 log.warning("Gemini 200 but no text for %s: %s", article_name, json.dumps(data)[:300])
             else:
                 body = await resp.text()
@@ -353,6 +391,7 @@ async def enrich_with_reasons(trending):
                 wiki_desc=article.get("wiki_desc", ""),
                 news_headline=article.get("news_headline", ""),
                 wiki_feature=article.get("wiki_feature", ""),
+                recent_edits=article.get("recent_edits", ""),
             )
             if reason:
                 log.info("Gemini: %s -> %s", article["article"], reason)
