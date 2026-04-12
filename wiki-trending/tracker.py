@@ -255,12 +255,12 @@ async def enrich_with_reasons(trending):
     """Replace descriptions with AI-generated trending reasons for top articles."""
     top = trending[:DISPLAY_COUNT]
     async with aiohttp.ClientSession() as session:
-        tasks = [get_trending_reason(session, a["article"], a["mult"]) for a in top]
-        reasons = await asyncio.gather(*tasks)
-        for article, reason in zip(top, reasons):
+        for article in top:
+            reason = await get_trending_reason(session, article["article"], article["mult"])
             if reason:
                 log.info("Gemini: %s -> %s", article["article"], reason)
                 article["desc"] = reason
+            await asyncio.sleep(2)
 
 
 def build_trmnl_payload(trending):
