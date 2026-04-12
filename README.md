@@ -1,97 +1,129 @@
 # TRMNL-Items
 
-Custom plugins for the [TRMNL](https://usetrmnl.com/) e-ink display.
+Custom plugins for the [TRMNL](https://usetrmnl.com/) e-ink display, powered by Docker and free APIs.
 
 ## Projects
 
 ### [Airport Tracker](airport-tracker/)
-Tracks daily flight activity at Montgomery-Gibbs Executive Airport (KMYF) in San Diego. Shows arrivals, departures, aircraft types, hourly activity chart, and weather.
+Tracks daily flight activity at a local airport using ADS-B data. Shows arrivals, departures, aircraft types, hourly activity chart, and weather. Currently configured for Montgomery-Gibbs Executive Airport (KMYF) in San Diego — easily adaptable to any airport by changing the coordinates in `tracker.py`.
 
 ---
 
-## How the Stack Works
+## How It Works
 
-### The Display
-- **TRMNL** is a 800x480 pixel e-ink display (black and white only, no grayscale)
-- It refreshes on its own schedule (~every 15 minutes)
-- Each plugin has an HTML/CSS template using [Liquid](https://shopify.github.io/liquid/) syntax for dynamic data
-- TRMNL hosts the templates — you paste markup into their web dashboard
+### Overview
 
-### The Server (Unraid)
-- An **Unraid server** (KServer) runs Docker containers 24/7
-- The GitHub repo is cloned to `/mnt/user/appdata/TRMNL-Items/`
-- Each project builds its own Docker image from its subfolder
-- Containers run continuously, polling APIs and pushing data to TRMNL
-- A **User Scripts** plugin ("trmnl-auto-update") checks GitHub daily and rebuilds containers if there are new commits
+Each project is a Python script that runs in a Docker container. It polls free APIs on a schedule, processes the data, and pushes a JSON payload to a TRMNL e-ink display via webhook. No paid APIs or authentication required.
 
-### The Data Flow
+### Data Flow
 
 ```
-  APIs (airplanes.live, Open-Meteo, etc.)
+  Free APIs (airplanes.live, Open-Meteo, etc.)
        |
        | poll every ~2 min
        v
-  Docker container (on Unraid)
+  Docker container (any always-on server)
   - Fetches data from APIs
   - Processes & tracks state (JSON file on disk)
-  - Builds payload (must be under 2KB)
+  - Builds payload (must stay under 2KB)
        |
        | push every ~10 min
        v
   TRMNL webhook API
-  - Receives JSON payload via POST
+  - Receives JSON via POST
   - Merges variables into the Liquid template
        |
-       | refresh every ~15 min
+       | display refreshes periodically
        v
   TRMNL e-ink display
   - Renders the template with the latest data
 ```
 
-### Where Each Piece Lives
+### Architecture
 
-| What | Where | Notes |
-|------|-------|-------|
-| Source code | GitHub (`KurtMoran/TRMNL-Items`) | Single repo for all TRMNL projects |
-| Server clone | `/mnt/user/appdata/TRMNL-Items/` on Unraid | `git pull` to update |
-| Docker containers | Unraid Docker | One container per project, `--restart unless-stopped` |
-| Persistent data | `<project>/data/` on Unraid | Mounted as Docker volume, survives rebuilds |
-| Liquid templates | TRMNL web dashboard | Pasted manually into the markup editor |
-| TRMNL plugin config | TRMNL web dashboard | Webhook strategy, plugin UUID, bleed margin settings |
+| Component | What it does |
+|-----------|-------------|
+| `tracker.py` | Main script — polls APIs, detects events, pushes to TRMNL |
+| `trmnl_template.html` | Liquid/HTML template — pasted into the TRMNL markup editor |
+| `preview.html` | Local browser preview with sample data for design iteration |
+| `Dockerfile` | Builds a lightweight Python container (python:3.12-slim) |
+| `data/` directory | Persistent state (JSON), mounted as a Docker volume |
 
-### TRMNL Plugin Setup (for each project)
+---
 
-1. Create a **Private Plugin** on the TRMNL dashboard
-2. Set strategy to **Webhook**
-3. Copy the **UUID** — this goes into the Docker container as an env variable
-4. Paste the project's HTML/Liquid template into the **Markup Editor**
-5. Set **Remove bleed margin** = Yes
-6. Uncheck **Show TRMNL logo**
+## Setup Guide
 
-### Server Setup (one-time)
+### Prerequisites
+
+- A [TRMNL](https://usetrmnl.com/) e-ink display
+- An always-on server that can run Docker (Unraid, Raspberry Pi, NAS, VPS, etc.)
+- Git installed on the server
+
+### 1. TRMNL Plugin Setup
+
+1. Log into the [TRMNL dashboard](https://trmnl.com/)
+2. Create a new **Private Plugin**
+3. Set the strategy to **Webhook**
+4. Copy the **Webhook UUID** — you'll need this for the Docker container
+5. Open the project's `trmnl_template.html` file, copy its contents, and paste into the **Markup Editor**
+6. Under plugin settings:
+   - Set **Remove bleed margin** = Yes
+   - Uncheck **Show TRMNL logo** (optional)
+7. Save
+
+### 2. Server Setup
+
+Clone the repo:
 
 ```bash
-# Clone the repo
-git clone https://github.com/KurtMoran/TRMNL-Items.git /mnt/user/appdata/TRMNL-Items
+git clone https://github.com/KurtMoran/TRMNL-Items.git
+cd TRMNL-Items
+```
 
-# Build and run a project (example: airport-tracker)
-cd /mnt/user/appdata/TRMNL-Items/airport-tracker
+Build and run a project (example: airport-tracker):
+
+```bash
+cd airport-tracker
 docker build --no-cache -t trmnl-items .
 docker run -d --name trmnl-items --restart unless-stopped \
   -e TZ=America/Los_Angeles \
-  -e TRMNL_WEBHOOK_UUID=<your-uuid> \
+  -e TRMNL_WEBHOOK_UUID=<your-uuid-from-step-4> \
   -e POLL_INTERVAL_SEC=120 \
   -e DATA_FILE=/data/tracker_state.json \
-  -v /mnt/user/appdata/TRMNL-Items/airport-tracker/data:/data \
+  -v $(pwd)/data:/data \
   trmnl-items
 ```
 
-### Updating After Code Changes
+Replace `<your-uuid-from-step-4>` with the UUID from the TRMNL dashboard, and adjust the timezone (`TZ`) to your location.
 
-Push changes to GitHub, then on the Unraid terminal:
+Verify it's running:
 
 ```bash
-cd /mnt/user/appdata/TRMNL-Items && git pull
+docker logs trmnl-items
+```
+
+### 3. Customization
+
+**Different airport?** Edit `tracker.py` and change these three lines:
+
+```python
+AIRPORT_LAT = 32.8157      # your airport's latitude
+AIRPORT_LON = -117.1397    # your airport's longitude
+AIRPORT_ELEV_FT = 427      # your airport's field elevation in feet
+```
+
+**Different timezone?** Change the `-e TZ=` value in the docker run command. Examples: `America/New_York`, `Europe/London`, `Asia/Tokyo`.
+
+**Different polling interval?** Change `-e POLL_INTERVAL_SEC=120` to your preferred interval in seconds.
+
+---
+
+## Updating
+
+### Manual update
+
+```bash
+cd TRMNL-Items && git pull
 docker stop trmnl-items && docker rm trmnl-items
 cd airport-tracker && docker build --no-cache -t trmnl-items .
 docker run -d --name trmnl-items --restart unless-stopped \
@@ -99,14 +131,60 @@ docker run -d --name trmnl-items --restart unless-stopped \
   -e TRMNL_WEBHOOK_UUID=<your-uuid> \
   -e POLL_INTERVAL_SEC=120 \
   -e DATA_FILE=/data/tracker_state.json \
-  -v /mnt/user/appdata/TRMNL-Items/airport-tracker/data:/data \
+  -v $(pwd)/data:/data \
   trmnl-items
 ```
 
-Or just let the auto-update User Script handle it (checks daily).
+### Auto-update (optional, Unraid)
 
-### Key Constraints
-- **2KB payload limit** on TRMNL's standard plan — keep JSON keys short
-- **No grayscale** on e-ink — use solid black, white, or CSS patterns (stripes, dots)
-- **No external CSS/JS** in templates — TRMNL's own CSS framework conflicts with custom styles
-- **Timezone** must be set via `-e TZ=America/Los_Angeles` or Docker defaults to UTC
+If you're on Unraid, install the **User Scripts** plugin and create a script that runs on a schedule (daily recommended):
+
+```bash
+#!/bin/bash
+cd /path/to/TRMNL-Items
+
+git fetch origin
+LOCAL=$(git rev-parse HEAD)
+REMOTE=$(git rev-parse origin/main)
+
+if [ "$LOCAL" != "$REMOTE" ]; then
+    echo "New changes found, updating..."
+    git pull
+    cd airport-tracker
+    docker stop trmnl-items
+    docker rm trmnl-items
+    docker build --no-cache -t trmnl-items .
+    docker run -d --name trmnl-items --restart unless-stopped \
+        -e TZ=America/Los_Angeles \
+        -e TRMNL_WEBHOOK_UUID=<your-uuid> \
+        -e POLL_INTERVAL_SEC=120 \
+        -e DATA_FILE=/data/tracker_state.json \
+        -v /path/to/TRMNL-Items/airport-tracker/data:/data \
+        trmnl-items
+    echo "Update complete!"
+else
+    echo "Already up to date."
+fi
+```
+
+---
+
+## Useful Commands
+
+| Command | What it does |
+|---------|-------------|
+| `docker logs trmnl-items` | View container logs |
+| `docker logs trmnl-items 2>&1 \| tail -20` | View recent logs |
+| `docker stop trmnl-items` | Stop the container |
+| `docker start trmnl-items` | Start the container |
+| `docker exec trmnl-items python -c "from tracker import *; state = load_state(); push_to_trmnl(build_trmnl_payload(state))"` | Force an immediate data push |
+
+---
+
+## Key Constraints
+
+- **2KB payload limit** — TRMNL's standard plan limits webhook payloads to 2KB. Keep JSON keys short and data arrays small.
+- **No grayscale** — e-ink displays render only black and white. Use CSS patterns (diagonal stripes, dots) instead of gray.
+- **No external CSS/JS** — TRMNL's built-in CSS framework can conflict with custom styles. Stick to inline/embedded styles.
+- **Timezone matters** — Docker containers default to UTC. Always set `-e TZ=` or timestamps will be wrong.
+- **State resets daily** — tracker data resets at midnight. The state file stays small and never grows unbounded.

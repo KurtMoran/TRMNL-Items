@@ -51,7 +51,7 @@ Design decisions:
 
 TRMNL plugin config:
   - Plugin type: Private plugin, Webhook strategy
-  - Webhook UUID: ac1fa5b5-e77f-485d-b8c0-056ed1db540d
+  - Webhook UUID: (set via TRMNL_WEBHOOK_UUID env variable)
   - Remove bleed margin: Yes
 
 GitHub repo:
@@ -70,7 +70,7 @@ Server setup (Unraid):
     docker build --no-cache -t trmnl-items .
     docker run -d --name trmnl-items --restart unless-stopped \
       -e TZ=America/Los_Angeles \
-      -e TRMNL_WEBHOOK_UUID=ac1fa5b5-e77f-485d-b8c0-056ed1db540d \
+      -e TRMNL_WEBHOOK_UUID=<your-uuid> \
       -e POLL_INTERVAL_SEC=120 \
       -e DATA_FILE=/data/tracker_state.json \
       -v /mnt/user/appdata/TRMNL-Items/airport-tracker/data:/data \
@@ -88,7 +88,7 @@ Server setup (Unraid):
     cd airport-tracker && docker build --no-cache -t trmnl-items .
     docker run -d --name trmnl-items --restart unless-stopped \
       -e TZ=America/Los_Angeles \
-      -e TRMNL_WEBHOOK_UUID=ac1fa5b5-e77f-485d-b8c0-056ed1db540d \
+      -e TRMNL_WEBHOOK_UUID=<your-uuid> \
       -e POLL_INTERVAL_SEC=120 \
       -e DATA_FILE=/data/tracker_state.json \
       -v /mnt/user/appdata/TRMNL-Items/airport-tracker/data:/data \
