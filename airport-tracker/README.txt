@@ -54,35 +54,54 @@ TRMNL plugin config:
   - Webhook UUID: ac1fa5b5-e77f-485d-b8c0-056ed1db540d
   - Remove bleed margin: Yes
 
+GitHub repo:
+  https://github.com/KurtMoran/TRMNL-Items (public)
+
 Server setup (Unraid):
-  Files live at: /mnt/user/appdata/kmyf-tracker/
-  State persisted at: /mnt/user/appdata/kmyf-tracker/data/tracker_state.json
-  Container name: kmyf-tracker
+  Repo cloned to: /mnt/user/appdata/TRMNL-Items/
+  Data persisted at: /mnt/user/appdata/TRMNL-Items/airport-tracker/data/
+  Container name: trmnl-items
+  Image name: trmnl-items
   Timezone: America/Los_Angeles (must be set or times show UTC)
 
-  Build:
-    cd /mnt/user/appdata/kmyf-tracker
-    docker build --no-cache -t kmyf-tracker .
-
-  Run:
-    docker run -d \
-      --name kmyf-tracker \
-      --restart unless-stopped \
+  First-time setup:
+    git clone https://github.com/KurtMoran/TRMNL-Items.git /mnt/user/appdata/TRMNL-Items
+    cd /mnt/user/appdata/TRMNL-Items/airport-tracker
+    docker build --no-cache -t trmnl-items .
+    docker run -d --name trmnl-items --restart unless-stopped \
       -e TZ=America/Los_Angeles \
       -e TRMNL_WEBHOOK_UUID=ac1fa5b5-e77f-485d-b8c0-056ed1db540d \
       -e POLL_INTERVAL_SEC=120 \
       -e DATA_FILE=/data/tracker_state.json \
-      -v /mnt/user/appdata/kmyf-tracker/data:/data \
-      kmyf-tracker
+      -v /mnt/user/appdata/TRMNL-Items/airport-tracker/data:/data \
+      trmnl-items
+
+  Auto-update from GitHub:
+    A User Script ("trmnl-auto-update") runs daily via the Unraid User Scripts
+    plugin. It checks GitHub for new commits, and if found, pulls the latest
+    code, rebuilds the Docker image, and restarts the container. Data is
+    preserved since it lives in a mounted volume.
+
+  Manual update from GitHub:
+    cd /mnt/user/appdata/TRMNL-Items && git pull
+    docker stop trmnl-items && docker rm trmnl-items
+    cd airport-tracker && docker build --no-cache -t trmnl-items .
+    docker run -d --name trmnl-items --restart unless-stopped \
+      -e TZ=America/Los_Angeles \
+      -e TRMNL_WEBHOOK_UUID=ac1fa5b5-e77f-485d-b8c0-056ed1db540d \
+      -e POLL_INTERVAL_SEC=120 \
+      -e DATA_FILE=/data/tracker_state.json \
+      -v /mnt/user/appdata/TRMNL-Items/airport-tracker/data:/data \
+      trmnl-items
 
   Useful commands:
-    docker logs kmyf-tracker                  - View logs
-    docker logs kmyf-tracker 2>&1 | tail -20  - Recent logs
-    docker stop kmyf-tracker                  - Stop
-    docker start kmyf-tracker                 - Start
+    docker logs trmnl-items                  - View logs
+    docker logs trmnl-items 2>&1 | tail -20  - Recent logs
+    docker stop trmnl-items                  - Stop
+    docker start trmnl-items                 - Start
 
   Force a data push:
-    docker exec kmyf-tracker python -c "
+    docker exec trmnl-items python -c "
     from tracker import *
     state = load_state()
     payload = build_trmnl_payload(state)
@@ -95,18 +114,10 @@ How to update the TRMNL template:
   3. Paste and Save
   4. Force Refresh to see changes
 
-How to update the tracker code:
-  1. Stop and remove: docker stop kmyf-tracker && docker rm kmyf-tracker
-  2. Paste new tracker.py onto Unraid via web terminal using:
-     cat > /mnt/user/appdata/kmyf-tracker/tracker.py << 'ENDFILE'
-     (paste file contents)
-     ENDFILE
-  3. Rebuild: cd /mnt/user/appdata/kmyf-tracker && docker build --no-cache -t kmyf-tracker .
-  4. Re-run the docker run command above
-
 Troubleshooting:
   - Times showing UTC? Add -e TZ=America/Los_Angeles to docker run
   - 422 payload too large? Variable names or data arrays need trimming
   - Bars not showing? Template might need new data pushed (force push above)
   - Docker build using old code? Use --no-cache flag
   - Gray bars invisible on e-ink? Use stripe pattern, not grayscale colors
+  - Container not restarting after reboot? Check --restart unless-stopped flag
