@@ -1,0 +1,139 @@
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  .screen {
+    width: 800px;
+    height: 480px;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #000;
+  }
+  .header {
+    padding: 16px 24px 12px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 3px solid #000;
+    flex-shrink: 0;
+  }
+  .header .title {
+    font-size: 22px;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+  .header .date {
+    font-size: 13px;
+    opacity: 0.5;
+  }
+  .articles {
+    flex: 1;
+    padding: 10px 24px 6px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .article-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 7px 0;
+    border-bottom: 1px solid #ccc;
+  }
+  .article-row:last-child {
+    border-bottom: none;
+  }
+  .mult-badge {
+    flex-shrink: 0;
+    min-width: 50px;
+    padding: 4px 6px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 14px;
+    border: 2px solid #000;
+    border-radius: 6px;
+    background: #000;
+    color: #fff;
+    line-height: 1;
+    margin-top: 1px;
+  }
+  .article-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .article-top {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .article-name {
+    font-size: 16px;
+    font-weight: bold;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
+  .article-views {
+    font-size: 12px;
+    flex-shrink: 0;
+    opacity: 0.5;
+  }
+  .article-desc {
+    font-size: 11px;
+    margin-top: 2px;
+    opacity: 0.45;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .footer {
+    border-top: 2px solid #000;
+    padding: 8px 24px;
+    display: flex;
+    align-items: center;
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+  .footer .ft-title {
+    font-weight: bold;
+    font-size: 12px;
+  }
+  .footer .ft-count {
+    margin-left: 12px;
+    opacity: 0.5;
+  }
+  .footer .ft-updated {
+    margin-left: auto;
+    opacity: 0.5;
+  }
+</style>
+
+<div class="screen">
+  <div class="header">
+    <span class="title">WIKIPEDIA TRENDING</span>
+    <span class="date">{{ date }}</span>
+  </div>
+
+  <div class="articles">
+    {% for a in articles %}
+    <div class="article-row">
+      <div class="mult-badge">{{ a.m }}</div>
+      <div class="article-info">
+        <div class="article-top">
+          <span class="article-name">{{ a.n }}</span>
+          <span class="article-views">{{ a.v }} views</span>
+        </div>
+        <div class="article-desc">{{ a.d }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="footer">
+    <span class="ft-title">Wiki Trending</span>
+    <span class="ft-count">{{ count }} articles trending today</span>
+    <span class="ft-updated">Updated {{ updated }}</span>
+  </div>
+</div>
