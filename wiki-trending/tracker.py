@@ -8,6 +8,7 @@ e-ink display via webhook.
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timedelta
@@ -57,11 +58,21 @@ def format_views(n):
 
 
 def format_mult(m):
+    """Return (number, suffix) for split badge rendering."""
     if m >= 1000:
-        return "{:.0f}Kx".format(m / 1000)
+        return {
+            "num": "{:.1f}".format(m / 1000),
+            "suf": "Kx",
+        }
     if m >= 10:
-        return "{:.0f}x".format(m)
-    return "{:.1f}x".format(m)
+        return {
+            "num": "{:.0f}".format(m),
+            "suf": "x",
+        }
+    return {
+        "num": "{:.1f}".format(m),
+        "suf": "x",
+    }
 
 
 def load_state():
@@ -192,10 +203,12 @@ def build_trmnl_payload(trending):
         name = a["article"].replace("_", " ")
         if len(name) > 30:
             name = name[:27] + "..."
-        # Build sparkline bars (max height 18px)
+        # Build sparkline bars using log scale (max height 18px)
+        # Log scale keeps low-traffic days visible instead of flat
         daily = a.get("daily", [])
-        max_views = max(daily) if daily else 1
-        spark = [{"h": max(1, int(v * 18 / max_views))} for v in daily]
+        log_daily = [math.log1p(v) for v in daily] if daily else []
+        max_log = max(log_daily) if log_daily else 1
+        spark = [{"h": max(2, int(v * 18 / max_log))} for v in log_daily]
         articles.append({
             "n": name,
             "v": format_views(a["views"]),

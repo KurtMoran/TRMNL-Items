@@ -50,13 +50,20 @@
     padding: 4px 6px;
     text-align: center;
     font-weight: bold;
-    font-size: 13px;
+    font-size: 15px;
     border: 2px solid #000;
     border-radius: 6px;
     background: #000;
     color: #fff;
     line-height: 1;
     margin-top: 1px;
+    white-space: nowrap;
+  }
+  .mult-suf {
+    font-size: 10px;
+    font-weight: normal;
+    opacity: 0.7;
+    letter-spacing: 0.5px;
   }
   .article-info {
     flex: 1;
@@ -134,7 +141,7 @@
   <div class="articles">
     {% for a in articles %}
     <div class="article-row">
-      <div class="mult-badge">{{ a.m }}</div>
+      <div class="mult-badge">{{ a.m.num }}<span class="mult-suf">{{ a.m.suf }}</span></div>
       <div class="article-info">
         <div class="article-top">
           <span class="article-name">{{ a.n }}</span>
