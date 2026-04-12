@@ -27,6 +27,7 @@ POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "14400"))  # 4 hours
 TRMNL_WEBHOOK_UUID = os.getenv("TRMNL_WEBHOOK_UUID", "")
 TRMNL_API_URL = "https://trmnl.com/api/custom_plugins"
 DATA_FILE = os.getenv("DATA_FILE", "/data/wiki_state.json")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 USER_AGENT = "TRMNL Wikipedia Trending Display (github.com/KurtMoran/TRMNL-Items)"
 
 # Pages to skip (utility/meta/adult pages)
@@ -215,6 +216,53 @@ async def fetch_trending():
         return trending
 
 
+async def get_trending_reason(session, article_name, mult):
+    """Ask Gemini with Google Search grounding why an article is trending."""
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        "models/gemini-2.0-flash:generateContent?key={}"
+    ).format(GEMINI_API_KEY)
+    prompt = (
+        "The Wikipedia article '{}' is getting {}x its normal daily traffic. "
+        "In one sentence, explain why it's trending right now. "
+        "Be specific about the event or news that caused the spike. "
+        "Don't start with 'The Wikipedia article'. Just state what happened."
+    ).format(article_name.replace("_", " "), mult)
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"maxOutputTokens": 80, "temperature": 0.2},
+    }
+    try:
+        async with session.post(url, json=payload) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    for part in parts:
+                        if "text" in part:
+                            return part["text"].strip()
+            else:
+                body = await resp.text()
+                log.warning("Gemini returned %d for %s: %s", resp.status, article_name, body[:200])
+    except Exception as e:
+        log.debug("Gemini fetch failed for %s: %s", article_name, e)
+    return ""
+
+
+async def enrich_with_reasons(trending):
+    """Replace descriptions with AI-generated trending reasons for top articles."""
+    top = trending[:DISPLAY_COUNT]
+    async with aiohttp.ClientSession() as session:
+        tasks = [get_trending_reason(session, a["article"], a["mult"]) for a in top]
+        reasons = await asyncio.gather(*tasks)
+        for article, reason in zip(top, reasons):
+            if reason:
+                log.info("Gemini: %s -> %s", article["article"], reason)
+                article["desc"] = reason
+
+
 def build_trmnl_payload(trending):
     now = datetime.now()
     display = trending[:DISPLAY_COUNT]
@@ -266,6 +314,10 @@ def main():
         log.info("TRMNL webhook configured")
     else:
         log.info("No TRMNL webhook - console only mode")
+    if GEMINI_API_KEY:
+        log.info("Gemini API configured - AI descriptions enabled")
+    else:
+        log.info("No Gemini API key - using news headlines / Wikipedia descriptions")
 
     while True:
         try:
@@ -273,10 +325,13 @@ def main():
             log.info("Found %d trending articles", len(trending))
 
             if trending:
+                if GEMINI_API_KEY:
+                    asyncio.run(enrich_with_reasons(trending))
                 for i, a in enumerate(trending[:10], 1):
                     log.info(
-                        "  #%d: %s (%.1fx, %s views)",
+                        "  #%d: %s (%.1fx, %s views) — %s",
                         i, a["article"], a["mult"], format_views(a["views"]),
+                        a["desc"][:80],
                     )
 
             state = {"last_fetch": datetime.now().isoformat(), "articles": trending}
