@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -125,10 +126,35 @@ async def get_description(session, article):
     return ""
 
 
+async def get_news_headline(session, article):
+    """Fetch the most recent news headline from Google News RSS."""
+    search_term = article.replace("_", " ")
+    url = (
+        "https://news.google.com/rss/search"
+        "?q={}&hl=en-US&gl=US&ceid=US:en"
+    ).format(search_term)
+    try:
+        async with session.get(url, headers={"User-Agent": USER_AGENT}) as resp:
+            if resp.status == 200:
+                text = await resp.text()
+                root = ET.fromstring(text)
+                item = root.find(".//item")
+                if item is not None:
+                    title = item.find("title")
+                    if title is not None and title.text:
+                        return title.text.strip()
+    except Exception as e:
+        log.debug("News fetch failed for %s: %s", article, e)
+    return ""
+
+
 async def process_article(session, article_name, current_views):
     views_task = get_article_views(session, article_name)
     desc_task = get_description(session, article_name)
-    historical, description = await asyncio.gather(views_task, desc_task)
+    news_task = get_news_headline(session, article_name)
+    historical, description, headline = await asyncio.gather(
+        views_task, desc_task, news_task,
+    )
 
     if not historical or len(historical) <= 1:
         return None
@@ -145,7 +171,7 @@ async def process_article(session, article_name, current_views):
             "views": current_views,
             "avg": int(avg),
             "mult": round(multiplier, 1),
-            "desc": description,
+            "desc": headline if headline else description,
         }
     return None
 
