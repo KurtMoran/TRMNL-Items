@@ -220,7 +220,7 @@ async def get_trending_reason(session, article_name, mult):
     """Ask Gemini with Google Search grounding why an article is trending."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-2.0-flash:generateContent?key={}"
+        "models/gemini-2.5-flash:generateContent?key={}"
     ).format(GEMINI_API_KEY)
     prompt = (
         "The Wikipedia article '{}' is getting {}x its normal daily traffic. "
