@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 import requests
@@ -91,7 +91,7 @@ def save_state(state):
 
 
 async def get_article_views(session, article, days_back=7):
-    end = datetime.now() - timedelta(days=1)
+    end = datetime.now(timezone.utc) - timedelta(days=1)
     start = end - timedelta(days=days_back)
     url = (
         "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
@@ -151,7 +151,7 @@ async def process_article(session, article_name, current_views):
 
 
 async def fetch_trending():
-    date = (datetime.now() - timedelta(days=1)).strftime("%Y/%m/%d")
+    date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y/%m/%d")
     url = (
         "https://wikimedia.org/api/rest_v1/metrics/pageviews/top/"
         "en.wikipedia/all-access/{}"
@@ -196,8 +196,8 @@ def build_trmnl_payload(trending):
     articles = []
     for a in display:
         desc = a["desc"]
-        if len(desc) > 90:
-            desc = desc[:87] + "..."
+        if len(desc) > 200:
+            desc = desc[:197] + "..."
         name = a["article"].replace("_", " ")
         if len(name) > 30:
             name = name[:27] + "..."
