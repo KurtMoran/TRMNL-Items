@@ -243,11 +243,12 @@ async def get_trending_reason(session, article_name, mult):
                     for part in parts:
                         if "text" in part:
                             return part["text"].strip()
+                log.warning("Gemini 200 but no text for %s: %s", article_name, json.dumps(data)[:300])
             else:
                 body = await resp.text()
                 log.warning("Gemini returned %d for %s: %s", resp.status, article_name, body[:200])
     except Exception as e:
-        log.debug("Gemini fetch failed for %s: %s", article_name, e)
+        log.warning("Gemini fetch failed for %s: %s", article_name, e)
     return ""
 
 
