@@ -56,6 +56,14 @@ def format_views(n):
     return str(n)
 
 
+def format_mult(m):
+    if m >= 1000:
+        return "{:.0f}Kx".format(m / 1000)
+    if m >= 10:
+        return "{:.0f}x".format(m)
+    return "{:.1f}x".format(m)
+
+
 def load_state():
     if os.path.exists(DATA_FILE):
         try:
@@ -93,15 +101,15 @@ async def get_description(session, article):
     url = "https://en.wikipedia.org/w/api.php"
     params = {
         "action": "query", "format": "json", "prop": "extracts",
-        "exintro": "1", "explaintext": "1", "titles": article,
+        "exintro": "1", "explaintext": "1", "exsentences": "2",
+        "titles": article,
     }
     try:
         async with session.get(url, params=params, headers={"User-Agent": USER_AGENT}) as resp:
             data = await resp.json()
             page = next(iter(data["query"]["pages"].values()))
             if "extract" in page:
-                first = page["extract"].split(".")[0]
-                return first + "."
+                return page["extract"].strip()
     except Exception as e:
         log.debug("Description fetch failed for %s: %s", article, e)
     return ""
@@ -128,6 +136,7 @@ async def process_article(session, article_name, current_views):
             "avg": int(avg),
             "mult": round(multiplier, 1),
             "desc": description,
+            "daily": daily,
         }
     return None
 
@@ -178,16 +187,21 @@ def build_trmnl_payload(trending):
     articles = []
     for a in display:
         desc = a["desc"]
-        if len(desc) > 80:
-            desc = desc[:77] + "..."
+        if len(desc) > 90:
+            desc = desc[:87] + "..."
         name = a["article"].replace("_", " ")
         if len(name) > 30:
             name = name[:27] + "..."
+        # Build sparkline bars (max height 18px)
+        daily = a.get("daily", [])
+        max_views = max(daily) if daily else 1
+        spark = [{"h": max(1, int(v * 18 / max_views))} for v in daily]
         articles.append({
             "n": name,
             "v": format_views(a["views"]),
-            "m": "{}x".format(a["mult"]),
+            "m": format_mult(a["mult"]),
             "d": desc,
+            "spark": spark,
         })
 
     return {"merge_variables": {

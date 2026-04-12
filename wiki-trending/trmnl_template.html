@@ -46,11 +46,11 @@
   }
   .mult-badge {
     flex-shrink: 0;
-    min-width: 50px;
+    min-width: 44px;
     padding: 4px 6px;
     text-align: center;
     font-weight: bold;
-    font-size: 14px;
+    font-size: 13px;
     border: 2px solid #000;
     border-radius: 6px;
     background: #000;
@@ -74,6 +74,21 @@
     overflow: hidden;
     text-overflow: ellipsis;
     flex: 1;
+  }
+  .sparkline {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    flex-shrink: 0;
+    height: 18px;
+    margin: 0 6px;
+    align-self: center;
+  }
+  .spark-bar {
+    width: 4px;
+    background: #000;
+    border-radius: 1px;
+    min-height: 1px;
   }
   .article-views {
     font-size: 12px;
@@ -123,6 +138,7 @@
       <div class="article-info">
         <div class="article-top">
           <span class="article-name">{{ a.n }}</span>
+          <span class="sparkline">{% for bar in a.spark %}<span class="spark-bar" style="height: {{ bar.h }}px;"></span>{% endfor %}</span>
           <span class="article-views">{{ a.v }} views</span>
         </div>
         <div class="article-desc">{{ a.d }}</div>
