@@ -102,6 +102,7 @@
     flex: 1;
     height: 18px;
     display: flex;
+    overflow: hidden;
   }
   .hour-row .hour-bar-arr {
     height: 18px;
@@ -211,7 +212,7 @@
           {% for h in hourly %}
           <div class="hour-row">
             <span class="hour-label">{{ h.hour }}</span>
-            <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: {{ h.aw }}px;"></span><span class="hour-bar-dep" style="width: {{ h.dw }}px;"></span></span>
+            <span class="hour-bar-wrap"><span class="hour-bar-arr" style="width: {{ h.aw }}%;"></span><span class="hour-bar-dep" style="width: {{ h.dw }}%;"></span></span>
             <span class="hour-count">{{ h.total }}</span>
           </div>
           {% endfor %}

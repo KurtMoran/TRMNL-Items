@@ -235,11 +235,9 @@ def build_trmnl_payload(state):
                 hourly_list.append({"hour": to_12hr(hk), "arr": counts["arrivals"],
                                      "dep": counts["departures"], "total": total})
     max_hourly = max((h["total"] for h in hourly_list), default=1)
-    max_bar_px = 300
     for h in hourly_list:
-        scale = max_bar_px / max_hourly
-        h["aw"] = int(h["arr"] * scale)
-        h["dw"] = int(h["dep"] * scale)
+        h["aw"] = int(h["arr"] * 85 / max_hourly)
+        h["dw"] = int(h["dep"] * 85 / max_hourly)
     total_movements = state["total_arrivals"] + state["total_departures"]
     weather = fetch_weather()
     return {"merge_variables": {
