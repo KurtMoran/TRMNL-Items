@@ -127,6 +127,46 @@ async def get_description(session, article):
     return ""
 
 
+async def get_wiki_featured(session):
+    """Fetch Wikipedia's main page featured content for yesterday (UTC)."""
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+    url = "https://api.wikimedia.org/feed/v1/wikipedia/en/featured/{}/{:02d}/{:02d}".format(
+        yesterday.year, yesterday.month, yesterday.day,
+    )
+    featured = {"tfa": "", "news": [], "onthisday": [], "dyk": []}
+    try:
+        async with session.get(url, headers={"User-Agent": USER_AGENT}) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                # Today's Featured Article
+                tfa = data.get("tfa", {})
+                if tfa:
+                    featured["tfa"] = tfa.get("normalizedtitle", "")
+                # In the News
+                for item in data.get("news", []):
+                    for link in item.get("links", []):
+                        featured["news"].append(link.get("normalizedtitle", ""))
+                # On This Day
+                for item in data.get("onthisday", []):
+                    for page in item.get("pages", []):
+                        featured["onthisday"].append(page.get("normalizedtitle", ""))
+    except Exception as e:
+        log.debug("Featured content fetch failed: %s", e)
+    return featured
+
+
+def check_wiki_feature(article_name, featured):
+    """Check if an article was featured on Wikipedia's main page."""
+    name = article_name.replace("_", " ")
+    if name == featured.get("tfa", ""):
+        return "Featured as Wikipedia's 'Today's Featured Article'"
+    if name in featured.get("news", []):
+        return "Featured in Wikipedia's 'In the News' section"
+    if name in featured.get("onthisday", []):
+        return "Featured in Wikipedia's 'On This Day' section"
+    return ""
+
+
 async def get_news_headline(session, article):
     """Fetch the most recent news headline from Google News RSS."""
     search_term = article.replace("_", " ")
@@ -198,6 +238,10 @@ async def fetch_trending():
         top_pages = data["items"][0]["articles"]
         candidates = [p for p in top_pages if not should_skip(p["article"])][:PAGES_TO_CHECK]
 
+        # Fetch Wikipedia's main page featured content
+        featured = await get_wiki_featured(session)
+        log.info("Featured article: %s", featured.get("tfa", "none"))
+
         log.info("Checking %d candidates for trending", len(candidates))
 
         trending = []
@@ -215,10 +259,19 @@ async def fetch_trending():
             )
 
         trending.sort(key=lambda x: -x["mult"])
+
+        # Tag articles that were featured on Wikipedia's main page
+        for article in trending:
+            feature = check_wiki_feature(article["article"], featured)
+            article["wiki_feature"] = feature
+            if feature:
+                log.info("Wiki feature: %s — %s", article["article"], feature)
+
         return trending
 
 
-async def get_trending_reason(session, article_name, mult, wiki_desc="", news_headline=""):
+async def get_trending_reason(session, article_name, mult, wiki_desc="",
+                              news_headline="", wiki_feature=""):
     """Ask Gemini with Google Search grounding why an article is trending."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
@@ -226,6 +279,8 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="", news_he
     ).format(GEMINI_API_KEY)
     name = article_name.replace("_", " ")
     context_parts = []
+    if wiki_feature:
+        context_parts.append("Wikipedia main page: {}".format(wiki_feature))
     if wiki_desc:
         context_parts.append("Wikipedia intro: {}".format(wiki_desc[:300]))
     if news_headline:
@@ -237,16 +292,29 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="", news_he
         "Article: {name}\n"
         "Traffic spike: {mult}x normal\n"
         "{context}\n\n"
-        "Write ONE sentence explaining the specific event causing the spike. "
-        "Use your web search to find out what happened.\n\n"
-        "Rules:\n"
-        "- State the event directly. Good: 'Scored his first Anfield goal for Liverpool against Fulham at age 16.'\n"
+        "Your job: figure out WHY this article is getting so much traffic and write "
+        "ONE sentence explaining it.\n\n"
+        "Use your web search to investigate. Check for:\n"
+        "- Breaking news or recent events\n"
+        "- Anniversaries or 'On This Day' milestones\n"
+        "- Wikipedia featuring it on their main page (Today's Featured Article, "
+        "Did You Know, In the News, On This Day)\n"
+        "- Viral social media posts, Reddit threads, or memes\n"
+        "- New movie/TV/game releases referencing the topic\n"
+        "- Celebrity deaths, awards, or controversies\n"
+        "- Sports results or milestones\n\n"
+        "Rules for your response:\n"
+        "- State the event directly. "
+        "Good: 'Scored his first Anfield goal for Liverpool against Fulham at age 16.'\n"
+        "Good: 'Featured on Wikipedia\\'s main page as Today\\'s Featured Article.'\n"
+        "Good: 'Went viral on Reddit after a user posted a photo of the castle ruins.'\n"
         "- Do NOT start with the article name — the reader already sees it on screen.\n"
-        "- Do NOT say 'is trending', 'went viral', 'the Wikipedia article', or 'the article'.\n"
+        "- Do NOT say 'is trending', 'went viral on Wikipedia', 'the Wikipedia article', "
+        "or 'the article'.\n"
         "- Do NOT explain that traffic spiked — the reader already knows.\n"
         "- Be specific: include names, dates, scores, outcomes when relevant.\n"
         "- Keep it under 150 characters if possible.\n"
-        "- If you truly cannot determine why, write a one-sentence summary of what this topic is."
+        "- If you truly cannot find the reason, say what it is and note the cause is unclear."
     ).format(name=name, mult=mult, context=context)
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -284,6 +352,7 @@ async def enrich_with_reasons(trending):
                 session, article["article"], article["mult"],
                 wiki_desc=article.get("wiki_desc", ""),
                 news_headline=article.get("news_headline", ""),
+                wiki_feature=article.get("wiki_feature", ""),
             )
             if reason:
                 log.info("Gemini: %s -> %s", article["article"], reason)
