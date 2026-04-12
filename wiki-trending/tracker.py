@@ -231,7 +231,10 @@ async def get_trending_reason(session, article_name, mult):
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "tools": [{"google_search": {}}],
-        "generationConfig": {"maxOutputTokens": 80, "temperature": 0.2},
+        "generationConfig": {
+            "maxOutputTokens": 1024,
+            "temperature": 0.2,
+        },
     }
     try:
         async with session.post(url, json=payload) as resp:
