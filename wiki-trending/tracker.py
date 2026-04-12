@@ -8,7 +8,6 @@ e-ink display via webhook.
 import asyncio
 import json
 import logging
-import math
 import os
 import time
 from datetime import datetime, timedelta
@@ -147,7 +146,6 @@ async def process_article(session, article_name, current_views):
             "avg": int(avg),
             "mult": round(multiplier, 1),
             "desc": description,
-            "daily": daily,
         }
     return None
 
@@ -203,18 +201,11 @@ def build_trmnl_payload(trending):
         name = a["article"].replace("_", " ")
         if len(name) > 30:
             name = name[:27] + "..."
-        # Build sparkline bars using log scale (max height 18px)
-        # Log scale keeps low-traffic days visible instead of flat
-        daily = a.get("daily", [])
-        log_daily = [math.log1p(v) for v in daily] if daily else []
-        max_log = max(log_daily) if log_daily else 1
-        spark = [{"h": max(2, int(v * 18 / max_log))} for v in log_daily]
         articles.append({
             "n": name,
             "v": format_views(a["views"]),
             "m": format_mult(a["mult"]),
             "d": desc,
-            "spark": spark,
         })
 
     return {"merge_variables": {
