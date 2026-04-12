@@ -224,8 +224,8 @@ async def get_trending_reason(session, article_name, mult):
     ).format(GEMINI_API_KEY)
     prompt = (
         "The Wikipedia article '{}' is getting {}x its normal daily traffic. "
-        "In one sentence, explain why it's trending right now. "
-        "Be specific about the event or news that caused the spike. "
+        "In one short sentence (under 120 characters), explain why it's trending right now. "
+        "Be specific about the event or news. "
         "Don't start with 'The Wikipedia article'. Just state what happened."
     ).format(article_name.replace("_", " "), mult)
     payload = {
@@ -260,7 +260,7 @@ async def enrich_with_reasons(trending):
             if reason:
                 log.info("Gemini: %s -> %s", article["article"], reason)
                 article["desc"] = reason
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
 
 
 def build_trmnl_payload(trending):
