@@ -348,7 +348,9 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
         "- Do NOT explain that traffic spiked — the reader already knows.\n"
         "- Be specific: include names, dates, scores, outcomes when relevant.\n"
         "- Keep it under 150 characters if possible.\n"
-        "- If you truly cannot find the reason, say what it is and note the cause is unclear."
+        "- If you truly cannot find the reason, write a concise description of what "
+        "the topic IS based on the Wikipedia intro provided. Do not mention that the "
+        "cause is unclear or unknown."
     ).format(name=name, mult=mult, context=context)
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
