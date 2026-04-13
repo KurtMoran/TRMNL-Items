@@ -37,7 +37,7 @@
     color: #000;
   }
   .header {
-    padding: 12px 24px 10px;
+    padding: 10px 24px 8px;
     display: flex;
     align-items: baseline;
     justify-content: space-between;
@@ -63,20 +63,21 @@
   }
   .articles {
     flex: 1;
-    padding: 6px 24px 12px;
+    padding: 0 24px;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    justify-content: space-evenly;
   }
   .article-row {
     display: flex;
     align-items: flex-start;
     gap: 14px;
-    padding: 9px 0;
-    border-bottom: 1px solid #ccc;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 3px;
   }
   .article-row:last-child {
     border-bottom: none;
+    padding-bottom: 0;
   }
   .mult-badge {
     flex-shrink: 0;
@@ -99,7 +100,7 @@
     opacity: 0.7;
     letter-spacing: 0.5px;
   }
-  .article-info {
+  .article-body {
     flex: 1;
     min-width: 0;
   }
@@ -120,10 +121,11 @@
     font-size: 12px;
     flex-shrink: 0;
     opacity: 0.5;
+    white-space: nowrap;
   }
   .article-desc {
-    font-size: 12px;
-    margin-top: 3px;
+    font-size: 13px;
+    margin-top: 2px;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -144,7 +146,7 @@
   <div class="articles">
     <div class="article-row">
       <div class="mult-badge">33.2<span class="mult-suf">Kx</span></div>
-      <div class="article-info">
+      <div class="article-body">
         <div class="article-top">
           <span class="article-name">St. George's Castle, Preveza</span>
           <span class="article-views">95K views</span>
@@ -154,37 +156,37 @@
     </div>
     <div class="article-row">
       <div class="mult-badge">6.9<span class="mult-suf">Kx</span></div>
-      <div class="article-info">
+      <div class="article-body">
         <div class="article-top">
           <span class="article-name">Rod Moore</span>
           <span class="article-views">97K views</span>
         </div>
-        <div class="article-desc">&mdash; Declared for the 2025 NFL Draft after rushing for 1,200+ yards as a sophomore at Wisconsin.</div>
+        <div class="article-desc">&mdash; Declared for the 2025 NFL Draft after rushing for 1,200+ yards as a sophomore at Wisconsin, drawing first-round projections.</div>
       </div>
     </div>
     <div class="article-row">
       <div class="mult-badge">265<span class="mult-suf">x</span></div>
-      <div class="article-info">
+      <div class="article-body">
         <div class="article-top">
           <span class="article-name">Kofta</span>
           <span class="article-views">92K views</span>
         </div>
-        <div class="article-desc">&mdash; Went viral on Reddit after a user posted a side-by-side of regional kofta variations across 12 countries.</div>
+        <div class="article-desc">&mdash; Went viral on Reddit after a user posted a side-by-side comparison of regional kofta variations across 12 countries.</div>
       </div>
     </div>
     <div class="article-row">
       <div class="mult-badge">257<span class="mult-suf">x</span></div>
-      <div class="article-info">
+      <div class="article-body">
         <div class="article-top">
           <span class="article-name">Problem gambling</span>
           <span class="article-views">48K views</span>
         </div>
-        <div class="article-desc">&mdash; Referenced in a viral ESPN segment on the rise of sports betting addiction among young adults.</div>
+        <div class="article-desc">&mdash; Referenced in a viral ESPN segment on the rise of sports betting addiction among young adults in the U.S.</div>
       </div>
     </div>
     <div class="article-row">
       <div class="mult-badge">158<span class="mult-suf">x</span></div>
-      <div class="article-info">
+      <div class="article-body">
         <div class="article-top">
           <span class="article-name">Relief of Douglas MacArthur</span>
           <span class="article-views">71K views</span>

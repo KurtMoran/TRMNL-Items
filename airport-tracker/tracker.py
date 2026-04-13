@@ -248,7 +248,6 @@ def build_trmnl_payload(state):
         "dep": state["total_departures"],
         "pk": peak_hour or "--", "pkn": peak_hour_count,
         "types": top_types, "hourly": hourly_list,
-        "airport_code": AIRPORT_CODE,
     }}
 
 def push_to_trmnl(payload):

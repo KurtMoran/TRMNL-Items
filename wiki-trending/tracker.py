@@ -409,8 +409,6 @@ def build_trmnl_payload(trending):
         if len(desc) > 200:
             desc = desc[:197] + "..."
         name = a["article"].replace("_", " ")
-        if len(name) > 30:
-            name = name[:27] + "..."
         articles.append({
             "n": name,
             "v": format_views(a["views"]),
