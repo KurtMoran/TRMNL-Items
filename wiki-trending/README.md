@@ -14,8 +14,8 @@ E-ink display showing Wikipedia articles that are trending well above their norm
 
 | API | Auth | Cost | Rate |
 |-----|------|------|------|
-| Wikipedia Pageviews | None | Free | ~400 requests/cycle |
-| Google News RSS | None | Free | 6 requests/cycle |
+| Wikipedia APIs | None | Free | ~600 requests/cycle |
+| Google News RSS | None | Free | ~200 requests/cycle |
 | Google Gemini 2.5 Flash | API key | Free tier | 5 requests/cycle, 5s apart |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
@@ -75,6 +75,6 @@ docker run -d \
 
 ## Description fallback chain
 
-1. **Gemini + Google Search** — AI-written explanation with live web context
-2. **Google News headline** — latest news headline about the topic
-3. **Wikipedia intro** — first two sentences of the article
+1. **Gemini + Google Search** — AI-written explanation with live web context. If the trending cause is unclear, Gemini writes a concise topic summary instead.
+2. **Google News headline** — latest news headline about the topic (used if Gemini is unavailable)
+3. **Wikipedia intro** — first two sentences of the article (used if both above fail)

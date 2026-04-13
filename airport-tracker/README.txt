@@ -28,7 +28,9 @@ Environment variables:
   AIRPORT_LAT         Latitude (default: 32.8157 / KMYF)
   AIRPORT_LON         Longitude (default: -117.1397 / KMYF)
   AIRPORT_ELEV_FT     Field elevation in feet (default: 427 / KMYF)
-  AIRPORT_CODE        Display name in footer (default: KMYF)
+  AIRPORT_CODE        Used in log messages (default: KMYF)
+                      Note: the display name in the footer is set via
+                      a Custom Field on the TRMNL plugin settings page.
   TZ                  Timezone (default: UTC)
   POLL_INTERVAL_SEC   Seconds between polls (default: 120)
   DATA_FILE           State file path (default: /data/tracker_state.json)
