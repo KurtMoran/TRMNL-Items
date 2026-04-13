@@ -368,9 +368,9 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
                     for part in parts:
                         if "text" in part:
                             text = part["text"].strip()
-                            # Remove Gemini citations like [cite: 1, 2] or [1]
-                            text = re.sub(r'\s*\[cite:[^\]]*\]', '', text)
-                            text = re.sub(r'\s*\[\d+(?:,\s*\d+)*\]', '', text)
+                            # Remove Gemini citations like [cite: 1, 2] or [1] or unclosed [cite: 1, 2
+                            text = re.sub(r'\s*\[cite:[^\]]*\]?', '', text)
+                            text = re.sub(r'\s*\[\d+(?:,\s*\d+)*\]?', '', text)
                             return text.strip()
                 log.warning("Gemini 200 but no text for %s: %s", article_name, json.dumps(data)[:300])
             else:

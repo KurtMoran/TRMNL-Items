@@ -6,7 +6,7 @@ E-ink display showing Wikipedia articles that are trending well above their norm
 
 1. Fetches yesterday's top 200 Wikipedia pages (by pageviews)
 2. Compares each to its 7-day average — articles above 3x are "trending"
-3. For the top 6, asks Google Gemini (with web search) to explain *why* it's trending
+3. For the top 5, asks Google Gemini (with web search) to explain *why* it's trending
 4. Falls back to Google News headlines, then Wikipedia intro if Gemini is unavailable
 5. Pushes results to a TRMNL e-ink display via webhook
 
@@ -16,7 +16,7 @@ E-ink display showing Wikipedia articles that are trending well above their norm
 |-----|------|------|------|
 | Wikipedia Pageviews | None | Free | ~400 requests/cycle |
 | Google News RSS | None | Free | 6 requests/cycle |
-| Google Gemini 2.0 Flash | API key | Free tier | 6 requests/cycle, 5s apart |
+| Google Gemini 2.5 Flash | API key | Free tier | 5 requests/cycle, 5s apart |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
 Runs every 4 hours (6 cycles/day).

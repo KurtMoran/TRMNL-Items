@@ -5,29 +5,28 @@ Custom plugins for the [TRMNL](https://usetrmnl.com/) e-ink display, powered by 
 ## Projects
 
 ### [Airport Tracker](airport-tracker/)
-Tracks daily flight activity at a local airport using ADS-B data. Shows arrivals, departures, aircraft types, hourly activity chart, and weather. Currently configured for Montgomery-Gibbs Executive Airport (KMYF) in San Diego — easily adaptable to any airport by changing the coordinates in `tracker.py`.
+Tracks daily flight activity at a local airport using ADS-B data. Shows arrivals, departures, aircraft types, hourly activity chart, and weather. Configurable for any airport via environment variables (defaults to KMYF in San Diego).
+
+### [Wiki Trending](wiki-trending/)
+Shows Wikipedia articles trending well above their normal traffic, with AI-generated explanations of why each article is spiking. Uses Google Gemini with web search grounding, with fallbacks to Google News headlines and Wikipedia intros.
 
 ---
 
 ## How It Works
 
-### Overview
-
-Each project is a Python script that runs in a Docker container. It polls free APIs on a schedule, processes the data, and pushes a JSON payload to a TRMNL e-ink display via webhook. No paid APIs or authentication required.
-
-### Data Flow
+Each project is a Python script that runs in a Docker container. It polls free APIs on a schedule, processes the data, and pushes a JSON payload to a TRMNL e-ink display via webhook.
 
 ```
-  Free APIs (airplanes.live, Open-Meteo, etc.)
+  Free APIs (airplanes.live, Wikipedia, Open-Meteo, Gemini, etc.)
        |
-       | poll every ~2 min
+       | poll on schedule
        v
   Docker container (any always-on server)
   - Fetches data from APIs
   - Processes & tracks state (JSON file on disk)
   - Builds payload (must stay under 2KB)
        |
-       | push every ~10 min
+       | push periodically
        v
   TRMNL webhook API
   - Receives JSON via POST
@@ -35,8 +34,7 @@ Each project is a Python script that runs in a Docker container. It polls free A
        |
        | display refreshes periodically
        v
-  TRMNL e-ink display
-  - Renders the template with the latest data
+  TRMNL e-ink display (800x480, black & white)
 ```
 
 ### Architecture
@@ -71,7 +69,7 @@ Each project is a Python script that runs in a Docker container. It polls free A
    - Uncheck **Show TRMNL logo** (optional)
 7. Save
 
-### 2. Server Setup
+### 2. Build and Run
 
 Clone the repo:
 
@@ -80,104 +78,55 @@ git clone https://github.com/KurtMoran/TRMNL-Items.git
 cd TRMNL-Items
 ```
 
-Build and run a project (example: airport-tracker):
+**Airport Tracker:**
 
 ```bash
 cd airport-tracker
-docker build --no-cache -t trmnl-items .
-docker run -d --name trmnl-items --restart unless-stopped \
+docker build --no-cache -t trmnl-airport .
+docker run -d --name trmnl-airport --restart unless-stopped \
   -e TZ=America/Los_Angeles \
-  -e TRMNL_WEBHOOK_UUID=<your-uuid-from-step-4> \
-  -e POLL_INTERVAL_SEC=120 \
-  -e DATA_FILE=/data/tracker_state.json \
+  -e TRMNL_WEBHOOK_UUID=your-uuid-here \
+  -e AIRPORT_CODE=KMYF \
+  -e AIRPORT_LAT=32.8157 \
+  -e AIRPORT_LON=-117.1397 \
+  -e AIRPORT_ELEV_FT=427 \
   -v $(pwd)/data:/data \
-  trmnl-items
+  trmnl-airport
 ```
 
-Replace `<your-uuid-from-step-4>` with the UUID from the TRMNL dashboard, and adjust the timezone (`TZ`) to your location.
-
-Verify it's running:
+**Wiki Trending:**
 
 ```bash
-docker logs trmnl-items
+cd wiki-trending
+docker build --no-cache -t wiki-trending .
+docker run -d --name wiki-trending --restart unless-stopped \
+  -e TZ=America/Los_Angeles \
+  -e TRMNL_WEBHOOK_UUID=your-uuid-here \
+  -e GEMINI_API_KEY=your-key-here \
+  -v $(pwd)/data:/data \
+  wiki-trending
 ```
 
-### 3. Customization
-
-**Different airport?** Edit `tracker.py` and change these three lines:
-
-```python
-AIRPORT_LAT = 32.8157      # your airport's latitude
-AIRPORT_LON = -117.1397    # your airport's longitude
-AIRPORT_ELEV_FT = 427      # your airport's field elevation in feet
-```
-
-**Different timezone?** Change the `-e TZ=` value in the docker run command. Examples: `America/New_York`, `Europe/London`, `Asia/Tokyo`.
-
-**Different polling interval?** Change `-e POLL_INTERVAL_SEC=120` to your preferred interval in seconds.
+See each project's README for the full list of environment variables.
 
 ---
 
 ## Updating
 
-### Manual update
-
 ```bash
-cd TRMNL-Items && git pull
-docker stop trmnl-items && docker rm trmnl-items
-cd airport-tracker && docker build --no-cache -t trmnl-items .
-docker run -d --name trmnl-items --restart unless-stopped \
-  -e TZ=America/Los_Angeles \
-  -e TRMNL_WEBHOOK_UUID=<your-uuid> \
-  -e POLL_INTERVAL_SEC=120 \
-  -e DATA_FILE=/data/tracker_state.json \
+cd /path/to/TRMNL-Items && git pull
+
+# Rebuild whichever project changed:
+docker stop <container-name> && docker rm <container-name>
+cd <project-dir> && docker build --no-cache -t <image-name> .
+docker run -d --name <container-name> --restart unless-stopped \
+  -e TZ=... -e TRMNL_WEBHOOK_UUID=... \
   -v $(pwd)/data:/data \
-  trmnl-items
+  <image-name>
+docker image prune -f
 ```
 
-### Auto-update (optional, Unraid)
-
-If you're on Unraid, install the **User Scripts** plugin and create a script that runs on a schedule (daily recommended):
-
-```bash
-#!/bin/bash
-cd /path/to/TRMNL-Items
-
-git fetch origin
-LOCAL=$(git rev-parse HEAD)
-REMOTE=$(git rev-parse origin/main)
-
-if [ "$LOCAL" != "$REMOTE" ]; then
-    echo "New changes found, updating..."
-    git pull
-    cd airport-tracker
-    docker stop trmnl-items
-    docker rm trmnl-items
-    docker build --no-cache -t trmnl-items .
-    docker run -d --name trmnl-items --restart unless-stopped \
-        -e TZ=America/Los_Angeles \
-        -e TRMNL_WEBHOOK_UUID=<your-uuid> \
-        -e POLL_INTERVAL_SEC=120 \
-        -e DATA_FILE=/data/tracker_state.json \
-        -v /path/to/TRMNL-Items/airport-tracker/data:/data \
-        trmnl-items
-    echo "Update complete!"
-else
-    echo "Already up to date."
-fi
-```
-
----
-
-## Useful Commands
-
-| Command | What it does |
-|---------|-------------|
-| `docker logs trmnl-items` | View container logs |
-| `docker logs trmnl-items 2>&1 \| tail -20` | View recent logs |
-| `docker stop trmnl-items` | Stop the container |
-| `docker start trmnl-items` | Start the container |
-| `docker exec trmnl-items python -c "from tracker import *; state = load_state(); push_to_trmnl(build_trmnl_payload(state))"` | Force an immediate data push |
+For automated updates on Unraid, use the **User Scripts** plugin with a daily schedule that checks for new commits and rebuilds.
 
 ---
 
@@ -187,4 +136,3 @@ fi
 - **No grayscale** — e-ink displays render only black and white. Use CSS patterns (diagonal stripes, dots) instead of gray.
 - **No external CSS/JS** — TRMNL's built-in CSS framework can conflict with custom styles. Stick to inline/embedded styles.
 - **Timezone matters** — Docker containers default to UTC. Always set `-e TZ=` or timestamps will be wrong.
-- **State resets daily** — tracker data resets at midnight. The state file stays small and never grows unbounded.

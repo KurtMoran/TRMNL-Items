@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""KMYF Airport Traffic Tracker for TRMNL e-ink display.
+"""Airport Traffic Tracker for TRMNL e-ink display.
 
-Polls airplanes.live every 2 minutes for aircraft near Montgomery-Gibbs
-Executive Airport (KMYF), detects arrivals/departures, and pushes daily
-stats to a TRMNL e-ink display via webhook.
+Polls airplanes.live every 2 minutes for aircraft near a configured airport,
+detects arrivals/departures, and pushes daily stats to a TRMNL e-ink
+display via webhook.
 """
 import json, logging, os, time
 from datetime import datetime
 import requests
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("kmyf-tracker")
+log = logging.getLogger("airport-tracker")
 
-AIRPORT_LAT = 32.8157
-AIRPORT_LON = -117.1397
-AIRPORT_ELEV_FT = 427
+AIRPORT_LAT = float(os.getenv("AIRPORT_LAT", "32.8157"))
+AIRPORT_LON = float(os.getenv("AIRPORT_LON", "-117.1397"))
+AIRPORT_ELEV_FT = int(os.getenv("AIRPORT_ELEV_FT", "427"))
+AIRPORT_CODE = os.getenv("AIRPORT_CODE", "KMYF")
 QUERY_RADIUS_NM = 5
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "120"))
 TRMNL_WEBHOOK_UUID = os.getenv("TRMNL_WEBHOOK_UUID", "")
@@ -247,6 +248,7 @@ def build_trmnl_payload(state):
         "dep": state["total_departures"],
         "pk": peak_hour or "--", "pkn": peak_hour_count,
         "types": top_types, "hourly": hourly_list,
+        "airport_code": AIRPORT_CODE,
     }}
 
 def push_to_trmnl(payload):
@@ -265,7 +267,7 @@ def push_to_trmnl(payload):
         log.error("TRMNL push failed: %s", e)
 
 def main():
-    log.info("Starting KMYF Airport Tracker")
+    log.info("Starting %s Airport Tracker", AIRPORT_CODE)
     log.info("Polling every %ds, radius %dnm", POLL_INTERVAL_SEC, QUERY_RADIUS_NM)
     if TRMNL_WEBHOOK_UUID:
         log.info("TRMNL webhook configured")
