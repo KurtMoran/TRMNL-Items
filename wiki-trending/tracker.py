@@ -307,7 +307,7 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
     """Ask Gemini with Google Search grounding why an article is trending."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-2.5-flash:generateContent?key={}"
+        "models/gemini-3.1-pro-preview:generateContent?key={}"
     ).format(GEMINI_API_KEY)
     name = article_name.replace("_", " ")
     context_parts = []
@@ -326,10 +326,10 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
         "Article: {name}\n"
         "Traffic spike: {mult}x normal\n"
         "{context}\n\n"
-        "Your job: figure out WHY this article is getting so much traffic and write "
-        "ONE sentence explaining it.\n\n"
+        "Your job: figure out WHY this article is getting so much traffic RIGHT NOW "
+        "and write ONE sentence explaining the specific event.\n\n"
         "Use your web search to investigate. Check for:\n"
-        "- Breaking news or recent events\n"
+        "- Breaking news or recent events involving this specific topic\n"
         "- Anniversaries or 'On This Day' milestones\n"
         "- Wikipedia featuring it on their main page (Today's Featured Article, "
         "Did You Know, In the News, On This Day)\n"
@@ -337,15 +337,17 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
         "- New movie/TV/game releases referencing the topic\n"
         "- Celebrity deaths, awards, or controversies\n"
         "- Sports results or milestones\n\n"
-        "Rules for your response:\n"
+        "CRITICAL rules for your response:\n"
+        "- Your sentence MUST be about '{name}' specifically — do not describe "
+        "a loosely related news story that merely mentions a similar topic.\n"
         "- State the event directly. "
-        "Good: 'Scored his first Anfield goal for Liverpool against Fulham at age 16.'\n"
-        "Good: 'Featured on Wikipedia\\'s main page as Today\\'s Featured Article.'\n"
+        "Good: 'Scored his first Anfield goal for Liverpool against Fulham at age 16.' "
+        "Good: 'Featured on Wikipedia\\'s main page as Today\\'s Featured Article.' "
         "Good: 'Went viral on Reddit after a user posted a photo of the castle ruins.'\n"
         "- Do NOT start with the article name — the reader already sees it on screen.\n"
-        "- Do NOT say 'is trending', 'went viral on Wikipedia', 'the Wikipedia article', "
-        "or 'the article'.\n"
-        "- Do NOT explain that traffic spiked — the reader already knows.\n"
+        "- NEVER use phrases like 'traffic spiked', 'views surged', 'spike in traffic', "
+        "'is trending', 'went viral on Wikipedia', 'the Wikipedia article', "
+        "or 'the article'. The reader already knows traffic is high.\n"
         "- Be specific: include names, dates, scores, outcomes when relevant.\n"
         "- Keep it under 150 characters if possible.\n"
         "- If you truly cannot find the reason, write a concise description of what "
@@ -356,8 +358,10 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
         "contents": [{"parts": [{"text": prompt}]}],
         "tools": [{"google_search": {}}],
         "generationConfig": {
-            "maxOutputTokens": 1024,
-            "temperature": 0.2,
+            "maxOutputTokens": 2048,
+            "thinkingConfig": {
+                "thinkingBudget": 1024,
+            },
         },
     }
     try:
