@@ -110,6 +110,69 @@ async def get_article_views(session, article, days_back=7):
     return []
 
 
+async def get_access_breakdown(session, article):
+    """Get desktop vs mobile breakdown for yesterday's views."""
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+    date_str = yesterday.strftime("%Y%m%d")
+    counts = {}
+    for access in ("desktop", "mobile-web", "mobile-app"):
+        url = (
+            "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
+            "en.wikipedia/{}/user/{}/daily/{}/{}"
+        ).format(access, article, date_str, date_str)
+        try:
+            async with session.get(url, headers={"User-Agent": USER_AGENT}) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    items = data.get("items", [])
+                    if items:
+                        counts[access] = items[0].get("views", 0)
+        except Exception:
+            pass
+    total = sum(counts.values())
+    if total == 0:
+        return ""
+    desktop = counts.get("desktop", 0)
+    mobile = counts.get("mobile-web", 0) + counts.get("mobile-app", 0)
+    desktop_pct = round(100 * desktop / total)
+    mobile_pct = round(100 * mobile / total)
+    return "Traffic split: {}% desktop, {}% mobile".format(desktop_pct, mobile_pct)
+
+
+async def get_hourly_pattern(session, article):
+    """Get yesterday's hourly pageview pattern to identify when the spike happened."""
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+    date_str = yesterday.strftime("%Y%m%d")
+    url = (
+        "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
+        "en.wikipedia/all-access/user/{}/hourly/{}/{}"
+    ).format(article, date_str + "00", date_str + "23")
+    try:
+        async with session.get(url, headers={"User-Agent": USER_AGENT}) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                items = data.get("items", [])
+                if not items:
+                    return ""
+                hourly = [(it.get("timestamp", "")[-4:-2], it.get("views", 0)) for it in items]
+                if not hourly:
+                    return ""
+                peak_hour, peak_views = max(hourly, key=lambda x: x[1])
+                total = sum(v for _, v in hourly)
+                # Format as compact summary
+                parts = ["Hourly views (UTC): " + ", ".join(
+                    "{}h:{}".format(h, format_views(v)) for h, v in hourly
+                )]
+                parts.append("Peak hour: {}:00 UTC ({} views, {:.0f}% of daily total)".format(
+                    peak_hour, format_views(peak_views),
+                    100 * peak_views / total if total else 0,
+                ))
+                return "\n".join(parts)
+    except Exception as e:
+        log.debug("Hourly pattern fetch failed for %s: %s", article, e)
+    return ""
+
+
 async def get_description(session, article):
     url = "https://en.wikipedia.org/w/api.php"
     params = {
@@ -190,6 +253,171 @@ async def get_news_headline(session, article):
     return ""
 
 
+async def get_reddit_mentions(session, article):
+    """Search Reddit for recent posts mentioning this topic."""
+    search_term = article.replace("_", " ")
+    url = "https://www.reddit.com/search.json"
+    params = {"q": search_term, "sort": "relevance", "t": "week", "limit": 5}
+    try:
+        async with session.get(url, params=params,
+                               headers={"User-Agent": USER_AGENT}) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                posts = data.get("data", {}).get("children", [])
+                if not posts:
+                    return ""
+                results = []
+                for post in posts[:3]:
+                    d = post.get("data", {})
+                    title = d.get("title", "")
+                    sub = d.get("subreddit", "")
+                    score = d.get("score", 0)
+                    comments = d.get("num_comments", 0)
+                    if title:
+                        results.append("r/{}: \"{}\" ({} upvotes, {} comments)".format(
+                            sub, title[:100], score, comments,
+                        ))
+                if results:
+                    return "Reddit posts this week:\n" + "\n".join(results)
+    except Exception as e:
+        log.debug("Reddit search failed for %s: %s", article, e)
+    return ""
+
+
+async def get_multilang_spike(session, article):
+    """Check if this article is also spiking on other language Wikipedias."""
+    # First get the Wikidata item to find other language titles
+    url = "https://en.wikipedia.org/w/api.php"
+    params = {
+        "action": "query", "format": "json", "prop": "langlinks",
+        "titles": article, "lllimit": "50",
+    }
+    try:
+        async with session.get(url, params=params, headers={"User-Agent": USER_AGENT}) as resp:
+            if resp.status != 200:
+                return ""
+            data = await resp.json()
+            page = next(iter(data["query"]["pages"].values()))
+            langlinks = page.get("langlinks", [])
+    except Exception as e:
+        log.debug("Langlinks fetch failed for %s: %s", article, e)
+        return ""
+
+    # Check top languages for spikes
+    check_langs = {}
+    for ll in langlinks:
+        lang = ll.get("lang", "")
+        if lang in ("de", "fr", "es", "ja", "ru", "pt", "it", "zh"):
+            check_langs[lang] = ll.get("*", "")
+
+    if not check_langs:
+        return ""
+
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+    week_ago = yesterday - timedelta(days=7)
+    date_y = yesterday.strftime("%Y%m%d")
+    date_w = week_ago.strftime("%Y%m%d")
+
+    spiking = []
+    for lang, title in check_langs.items():
+        try:
+            view_url = (
+                "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
+                "{}.wikipedia/all-access/user/{}/daily/{}/{}"
+            ).format(lang, title, date_w, date_y)
+            async with session.get(view_url, headers={"User-Agent": USER_AGENT}) as resp:
+                if resp.status != 200:
+                    continue
+                vdata = await resp.json()
+                items = vdata.get("items", [])
+                if len(items) < 2:
+                    continue
+                daily = [d["views"] for d in items]
+                avg = sum(daily[:-1]) / max(len(daily) - 1, 1)
+                if avg > 0 and daily[-1] / avg >= 2.0:
+                    spiking.append("{} ({:.0f}x)".format(lang, daily[-1] / avg))
+        except Exception:
+            pass
+
+    if spiking:
+        return "Also spiking on other Wikipedias: {}".format(", ".join(spiking))
+    return ""
+
+
+async def get_wikidata_info(session, article):
+    """Get structured data from Wikidata (dates, type) to help identify anniversaries."""
+    # Resolve Wikipedia article to Wikidata entity
+    url = "https://en.wikipedia.org/w/api.php"
+    params = {
+        "action": "query", "format": "json", "prop": "pageprops",
+        "ppprop": "wikibase_item", "titles": article,
+    }
+    try:
+        async with session.get(url, params=params, headers={"User-Agent": USER_AGENT}) as resp:
+            if resp.status != 200:
+                return ""
+            data = await resp.json()
+            page = next(iter(data["query"]["pages"].values()))
+            qid = page.get("pageprops", {}).get("wikibase_item", "")
+            if not qid:
+                return ""
+    except Exception as e:
+        log.debug("Wikidata resolve failed for %s: %s", article, e)
+        return ""
+
+    # Fetch key properties from Wikidata
+    wd_url = "https://www.wikidata.org/w/api.php"
+    params = {
+        "action": "wbgetclaims", "format": "json", "entity": qid,
+        # P31=instance of, P569=birth, P570=death, P571=inception,
+        # P576=dissolved, P585=point in time, P580=start time
+        "property": "P31|P569|P570|P571|P576|P585|P580",
+    }
+    try:
+        async with session.get(wd_url, params=params, headers={"User-Agent": USER_AGENT}) as resp:
+            if resp.status != 200:
+                return ""
+            data = await resp.json()
+            claims = data.get("claims", {})
+    except Exception as e:
+        log.debug("Wikidata claims failed for %s: %s", article, e)
+        return ""
+
+    today = datetime.now(timezone.utc)
+    parts = []
+
+    # Extract dates and check for anniversaries
+    date_props = {
+        "P569": "Born", "P570": "Died", "P571": "Founded/created",
+        "P576": "Dissolved", "P585": "Occurred", "P580": "Started",
+    }
+    for prop, label in date_props.items():
+        for claim in claims.get(prop, []):
+            try:
+                tv = claim["mainsnak"]["datavalue"]["value"]["time"]
+                # Wikidata format: +YYYY-MM-DDT00:00:00Z
+                year = int(tv[1:5])
+                month = int(tv[6:8])
+                day = int(tv[9:11])
+                if month == 0 or day == 0:
+                    continue
+                years_ago = today.year - year
+                if month == today.month and day == today.day:
+                    parts.append("{}: {}-{:02d}-{:02d} (exactly {} years ago TODAY)".format(
+                        label, year, month, day, years_ago))
+                elif abs((today - datetime(today.year, month, day, tzinfo=timezone.utc)).days) <= 3:
+                    parts.append("{}: {}-{:02d}-{:02d} ({} years ago this week)".format(
+                        label, year, month, day, years_ago))
+                else:
+                    parts.append("{}: {}-{:02d}-{:02d}".format(label, year, month, day))
+            except (KeyError, ValueError, TypeError):
+                pass
+
+    if parts:
+        return "Wikidata: " + "; ".join(parts)
+    return ""
+
+
 async def get_recent_edits(session, article):
     """Fetch recent edit summaries for an article."""
     url = "https://en.wikipedia.org/w/api.php"
@@ -224,8 +452,15 @@ async def process_article(session, article_name, current_views):
     desc_task = get_description(session, article_name)
     news_task = get_news_headline(session, article_name)
     edits_task = get_recent_edits(session, article_name)
-    historical, description, headline, edits = await asyncio.gather(
-        views_task, desc_task, news_task, edits_task,
+    access_task = get_access_breakdown(session, article_name)
+    hourly_task = get_hourly_pattern(session, article_name)
+    reddit_task = get_reddit_mentions(session, article_name)
+    multilang_task = get_multilang_spike(session, article_name)
+    wikidata_task = get_wikidata_info(session, article_name)
+    (historical, description, headline, edits, access,
+     hourly, reddit, multilang, wikidata) = await asyncio.gather(
+        views_task, desc_task, news_task, edits_task, access_task,
+        hourly_task, reddit_task, multilang_task, wikidata_task,
     )
 
     if not historical or len(historical) <= 1:
@@ -238,6 +473,8 @@ async def process_article(session, article_name, current_views):
 
     multiplier = current_views / avg
     if multiplier >= TRENDING_THRESHOLD:
+        # Format daily views as readable shape: "1.2K, 1.1K, 1.3K, ..., 50K"
+        daily_shape = ", ".join(format_views(v) for v in daily)
         return {
             "article": article_name,
             "views": current_views,
@@ -246,6 +483,12 @@ async def process_article(session, article_name, current_views):
             "wiki_desc": description,
             "news_headline": headline,
             "recent_edits": edits,
+            "access_breakdown": access,
+            "daily_shape": daily_shape,
+            "hourly_pattern": hourly,
+            "reddit_mentions": reddit,
+            "multilang_spike": multilang,
+            "wikidata_info": wikidata,
             "desc": headline if headline else description,
         }
     return None
@@ -303,11 +546,13 @@ async def fetch_trending():
 
 
 async def get_trending_reason(session, article_name, mult, wiki_desc="",
-                              news_headline="", wiki_feature="", recent_edits=""):
+                              news_headline="", wiki_feature="", recent_edits="",
+                              access_breakdown="", daily_shape="", hourly_pattern="",
+                              reddit_mentions="", multilang_spike="", wikidata_info=""):
     """Ask Gemini with Google Search grounding why an article is trending."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-3.1-pro-preview:generateContent?key={}"
+        "models/gemini-2.5-flash:generateContent?key={}"
     ).format(GEMINI_API_KEY)
     name = article_name.replace("_", " ")
     context_parts = []
@@ -319,6 +564,18 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
         context_parts.append("Recent headline: {}".format(news_headline))
     if recent_edits:
         context_parts.append("Recent Wikipedia edits: {}".format(recent_edits[:300]))
+    if access_breakdown:
+        context_parts.append(access_breakdown)
+    if daily_shape:
+        context_parts.append("Daily views (oldest to newest): {}".format(daily_shape))
+    if hourly_pattern:
+        context_parts.append(hourly_pattern)
+    if reddit_mentions:
+        context_parts.append(reddit_mentions)
+    if multilang_spike:
+        context_parts.append(multilang_spike)
+    if wikidata_info:
+        context_parts.append(wikidata_info)
     context = "\n".join(context_parts)
     prompt = (
         "You are writing one-line descriptions for an e-ink display that shows "
@@ -328,15 +585,19 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
         "{context}\n\n"
         "Your job: figure out WHY this article is getting so much traffic RIGHT NOW "
         "and write ONE sentence explaining the specific event.\n\n"
-        "Use your web search to investigate. Check for:\n"
-        "- Breaking news or recent events involving this specific topic\n"
-        "- Anniversaries or 'On This Day' milestones\n"
-        "- Wikipedia featuring it on their main page (Today's Featured Article, "
-        "Did You Know, In the News, On This Day)\n"
-        "- Viral social media posts, Reddit threads, or memes\n"
-        "- New movie/TV/game releases referencing the topic\n"
-        "- Celebrity deaths, awards, or controversies\n"
-        "- Sports results or milestones\n\n"
+        "Use the data provided AND your web search to investigate. You have been given:\n"
+        "- Daily and hourly traffic patterns (look for sudden spikes vs gradual rises)\n"
+        "- Desktop vs mobile split (heavy mobile = social media; heavy desktop = news/search)\n"
+        "- Reddit posts mentioning this topic (Reddit is a top Wikipedia traffic driver)\n"
+        "- Whether other language Wikipedias are also spiking (global event vs English-only)\n"
+        "- Wikidata dates (check if today is a notable anniversary)\n"
+        "- Wikipedia main page features, news headlines, and recent edit activity\n\n"
+        "Use these clues together to determine the cause. For example:\n"
+        "- Spike at a single hour + heavy mobile = likely a viral tweet or TikTok\n"
+        "- Spiking across multiple languages = global news event\n"
+        "- Anniversary date from Wikidata matching today = anniversary-driven traffic\n"
+        "- High-upvote Reddit post = Reddit-driven traffic\n"
+        "- Gradual rise + heavy desktop = news article or Wikipedia feature\n\n"
         "CRITICAL rules for your response:\n"
         "- Your sentence MUST be about '{name}' specifically — do not describe "
         "a loosely related news story that merely mentions a similar topic.\n"
@@ -358,9 +619,9 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
         "contents": [{"parts": [{"text": prompt}]}],
         "tools": [{"google_search": {}}],
         "generationConfig": {
-            "maxOutputTokens": 2048,
+            "maxOutputTokens": 4096,
             "thinkingConfig": {
-                "thinkingBudget": 1024,
+                "thinkingBudget": 2048,
             },
         },
     }
@@ -398,6 +659,12 @@ async def enrich_with_reasons(trending):
                 news_headline=article.get("news_headline", ""),
                 wiki_feature=article.get("wiki_feature", ""),
                 recent_edits=article.get("recent_edits", ""),
+                access_breakdown=article.get("access_breakdown", ""),
+                daily_shape=article.get("daily_shape", ""),
+                hourly_pattern=article.get("hourly_pattern", ""),
+                reddit_mentions=article.get("reddit_mentions", ""),
+                multilang_spike=article.get("multilang_spike", ""),
+                wikidata_info=article.get("wikidata_info", ""),
             )
             if reason:
                 log.info("Gemini: %s -> %s", article["article"], reason)

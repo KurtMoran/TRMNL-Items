@@ -113,20 +113,44 @@ See each project's README for the full list of environment variables.
 
 ## Updating
 
-```bash
-cd /path/to/TRMNL-Items && git pull
+An [`update.sh`](update.sh) script is included that pulls the latest code from GitHub, rebuilds all containers, and restarts them. It always rebuilds even if the code hasn't changed, so your containers get fresh data on every run.
 
-# Rebuild whichever project changed:
-docker stop <container-name> && docker rm <container-name>
-cd <project-dir> && docker build --no-cache -t <image-name> .
-docker run -d --name <container-name> --restart unless-stopped \
-  -e TZ=... -e TRMNL_WEBHOOK_UUID=... \
-  -v $(pwd)/data:/data \
-  <image-name>
-docker image prune -f
+### Automated Updates (Unraid)
+
+The recommended way to run this is via the **User Scripts** plugin on Unraid with a daily schedule.
+
+1. Install the **User Scripts** plugin from Community Applications
+2. Add a new script (e.g. `trmnl-auto-update`)
+3. Paste the following, replacing the placeholder values with your actual keys:
+
+```bash
+#!/bin/bash
+export GEMINI_API_KEY="your-gemini-api-key"
+export AIRPORT_WEBHOOK_UUID="your-airport-webhook-uuid"
+export WIKI_WEBHOOK_UUID="your-wiki-webhook-uuid"
+bash /mnt/user/appdata/TRMNL-Items/update.sh
 ```
 
-For automated updates on Unraid, use the **User Scripts** plugin with a daily schedule that checks for new commits and rebuilds.
+4. Set the schedule (e.g. daily) or run manually whenever you want fresh data
+
+Your secrets stay in the User Script on your server and are never committed to the repo.
+
+### Manual Updates
+
+You can also run `update.sh` directly from the server terminal:
+
+```bash
+export GEMINI_API_KEY="your-gemini-api-key"
+export AIRPORT_WEBHOOK_UUID="your-airport-webhook-uuid"
+export WIKI_WEBHOOK_UUID="your-wiki-webhook-uuid"
+bash /mnt/user/appdata/TRMNL-Items/update.sh
+```
+
+After the script finishes, wait 2-3 minutes for the containers to fetch data and push to TRMNL, then force refresh your display.
+
+### Adding a New Plugin
+
+To add a new TRMNL plugin to the update script, add a new block to `update.sh` following the same pattern — stop, remove, build, run. Pass any required API keys as environment variables.
 
 ---
 
