@@ -59,12 +59,14 @@
   }
   .col-types {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
   .col-hourly {
     flex: 1.5;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -80,11 +82,13 @@
     display: flex;
     align-items: center;
     font-size: 13px;
+    gap: 8px;
     padding: 0;
   }
-  .type-row .ac-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .type-row .ac-count { font-weight: bold; text-align: right; width: 28px; margin-right: 10px; }
+  .type-row .ac-name { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .type-row .ac-count { font-weight: bold; text-align: right; flex: 0 0 32px; }
   .type-row .ac-bar {
+    flex: 0 0 auto;
     height: 12px;
     background: #000;
     border-radius: 2px;
@@ -211,7 +215,7 @@
           <div class="type-row">
             <span class="ac-name">{{ item.type }}</span>
             <span class="ac-count">{{ item.count }}</span>
-            <span class="ac-bar" style="width: {{ item.count | times: 7 }}px;"></span>
+            <span class="ac-bar" style="width: {{ item.count | at_least: 4 | at_most: 110 }}px;"></span>
           </div>
           {% endfor %}
         </div>

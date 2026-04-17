@@ -155,14 +155,6 @@ def fetch_aircraft():
         log.error("API fetch failed: %s", e)
         return []
 
-def classify_movement(ac):
-    baro_rate = ac.get("baro_rate", 0) or 0
-    if baro_rate < -200:
-        return "arrival"
-    elif baro_rate > 200:
-        return "departure"
-    return None
-
 def process_aircraft(state, aircraft_list):
     now = time.time()
     hour_key = datetime.now().strftime("%H")
@@ -173,10 +165,8 @@ def process_aircraft(state, aircraft_list):
         if not hex_id:
             continue
         alt_baro = ac.get("alt_baro")
-        if alt_baro is None or alt_baro == "ground":
-            alt_agl = 0
-        else:
-            alt_agl = alt_baro - AIRPORT_ELEV_FT
+        on_ground = alt_baro is None or alt_baro == "ground"
+        alt_agl = 0 if on_ground else alt_baro - AIRPORT_ELEV_FT
         dst = ac.get("dst", 99)
         if dst > CLOSE_RADIUS_NM or alt_agl > MAX_ALT_AGL:
             continue
@@ -184,27 +174,39 @@ def process_aircraft(state, aircraft_list):
         ac_desc = ac.get("desc", ac_type)
         registration = ac.get("r", "")
         callsign = (ac.get("flight") or "").strip()
-        if hex_id not in state["active_aircraft"]:
-            movement = classify_movement(ac)
-            if movement:
-                if movement == "arrival":
-                    state["total_arrivals"] += 1
-                    state["hourly_counts"][hour_key]["arrivals"] += 1
-                else:
-                    state["total_departures"] += 1
-                    state["hourly_counts"][hour_key]["departures"] += 1
-                friendly_name, category = get_aircraft_info(ac_type, ac_desc)
-                if ac_type and ac_type != "Unknown":
-                    type_key = friendly_name or ac_type
-                    state["type_counts"][type_key] = state["type_counts"].get(type_key, 0) + 1
-                state["recent_movements"].append({
-                    "time": datetime.now().strftime("%-I:%M %p"),
-                    "type": movement, "aircraft": friendly_name,
-                    "registration": registration,
-                })
-                state["recent_movements"] = state["recent_movements"][-20:]
-                log.info("%s: %s %s (%s) - %s", movement.upper(), ac_type, registration, callsign, ac_desc)
-        state["active_aircraft"][hex_id] = {"last_seen": now, "type": ac_type, "registration": registration}
+
+        prev = state["active_aircraft"].get(hex_id)
+        movement = None
+        if prev is not None:
+            was_ground = prev.get("on_ground", False)
+            if was_ground and not on_ground:
+                movement = "departure"
+            elif not was_ground and on_ground:
+                movement = "arrival"
+
+        if movement:
+            if movement == "arrival":
+                state["total_arrivals"] += 1
+                state["hourly_counts"][hour_key]["arrivals"] += 1
+            else:
+                state["total_departures"] += 1
+                state["hourly_counts"][hour_key]["departures"] += 1
+            friendly_name, category = get_aircraft_info(ac_type, ac_desc)
+            if ac_type and ac_type != "Unknown":
+                type_key = friendly_name or ac_type
+                state["type_counts"][type_key] = state["type_counts"].get(type_key, 0) + 1
+            state["recent_movements"].append({
+                "time": datetime.now().strftime("%-I:%M %p"),
+                "type": movement, "aircraft": friendly_name,
+                "registration": registration,
+            })
+            state["recent_movements"] = state["recent_movements"][-20:]
+            log.info("%s: %s %s (%s) - %s", movement.upper(), ac_type, registration, callsign, ac_desc)
+
+        state["active_aircraft"][hex_id] = {
+            "last_seen": now, "type": ac_type,
+            "registration": registration, "on_ground": on_ground,
+        }
     stale = [h for h, info in state["active_aircraft"].items() if now - info["last_seen"] > GONE_TIMEOUT_SEC]
     for h in stale:
         del state["active_aircraft"][h]
