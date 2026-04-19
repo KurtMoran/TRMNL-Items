@@ -495,20 +495,23 @@ async def process_article(session, article_name, current_views):
 
 
 async def fetch_trending():
-    date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y/%m/%d")
-    url = (
-        "https://wikimedia.org/api/rest_v1/metrics/pageviews/top/"
-        "en.wikipedia/all-access/{}"
-    ).format(date)
-
-    log.info("Fetching top pages for %s", date)
-
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers={"User-Agent": USER_AGENT}) as resp:
-            if resp.status != 200:
-                log.error("Top pages fetch failed: %d", resp.status)
-                return []
-            data = await resp.json()
+        data = None
+        for days_back in range(1, 8):
+            date = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y/%m/%d")
+            url = (
+                "https://wikimedia.org/api/rest_v1/metrics/pageviews/top/"
+                "en.wikipedia/all-access/{}"
+            ).format(date)
+            log.info("Fetching top pages for %s", date)
+            async with session.get(url, headers={"User-Agent": USER_AGENT}) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    break
+                log.warning("Top pages for %s not available (%d), trying earlier day", date, resp.status)
+        if data is None:
+            log.error("No top-pages data available in last 7 days")
+            return []
 
         top_pages = data["items"][0]["articles"]
         candidates = [p for p in top_pages if not should_skip(p["article"])][:PAGES_TO_CHECK]
