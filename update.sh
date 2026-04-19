@@ -30,14 +30,16 @@ fi
 echo "Rebuilding airport tracker..."
 docker stop trmnl-items 2>/dev/null
 docker rm trmnl-items 2>/dev/null
-docker build --no-cache -t trmnl-items ./airport-tracker/
-docker run -d --name trmnl-items --restart unless-stopped \
+docker stop airport-tracker 2>/dev/null
+docker rm airport-tracker 2>/dev/null
+docker build --no-cache -t airport-tracker ./airport-tracker/
+docker run -d --name airport-tracker --restart unless-stopped \
     -e TZ=America/Los_Angeles \
     -e TRMNL_WEBHOOK_UUID="$AIRPORT_WEBHOOK_UUID" \
     -e POLL_INTERVAL_SEC=120 \
     -e DATA_FILE=/data/tracker_state.json \
     -v /mnt/user/appdata/TRMNL-Items/airport-tracker/data:/data \
-    trmnl-items
+    airport-tracker
 
 # --- Wiki Trending ---
 echo "Rebuilding wiki trending..."
