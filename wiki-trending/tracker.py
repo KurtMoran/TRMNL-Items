@@ -447,22 +447,9 @@ async def get_recent_edits(session, article):
     return ""
 
 
-async def process_article(session, article_name, current_views):
-    views_task = get_article_views(session, article_name)
-    desc_task = get_description(session, article_name)
-    news_task = get_news_headline(session, article_name)
-    edits_task = get_recent_edits(session, article_name)
-    access_task = get_access_breakdown(session, article_name)
-    hourly_task = get_hourly_pattern(session, article_name)
-    reddit_task = get_reddit_mentions(session, article_name)
-    multilang_task = get_multilang_spike(session, article_name)
-    wikidata_task = get_wikidata_info(session, article_name)
-    (historical, description, headline, edits, access,
-     hourly, reddit, multilang, wikidata) = await asyncio.gather(
-        views_task, desc_task, news_task, edits_task, access_task,
-        hourly_task, reddit_task, multilang_task, wikidata_task,
-    )
-
+async def check_trending(session, article_name, current_views):
+    """Lightweight check: fetch only historical views to test the threshold."""
+    historical = await get_article_views(session, article_name)
     if not historical or len(historical) <= 1:
         return None
 
@@ -472,26 +459,42 @@ async def process_article(session, article_name, current_views):
         return None
 
     multiplier = current_views / avg
-    if multiplier >= TRENDING_THRESHOLD:
-        # Format daily views as readable shape: "1.2K, 1.1K, 1.3K, ..., 50K"
-        daily_shape = ", ".join(format_views(v) for v in daily)
-        return {
-            "article": article_name,
-            "views": current_views,
-            "avg": int(avg),
-            "mult": round(multiplier, 1),
-            "wiki_desc": description,
-            "news_headline": headline,
-            "recent_edits": edits,
-            "access_breakdown": access,
-            "daily_shape": daily_shape,
-            "hourly_pattern": hourly,
-            "reddit_mentions": reddit,
-            "multilang_spike": multilang,
-            "wikidata_info": wikidata,
-            "desc": headline if headline else description,
-        }
-    return None
+    if multiplier < TRENDING_THRESHOLD:
+        return None
+
+    daily_shape = ", ".join(format_views(v) for v in daily)
+    return {
+        "article": article_name,
+        "views": current_views,
+        "avg": int(avg),
+        "mult": round(multiplier, 1),
+        "daily_shape": daily_shape,
+    }
+
+
+async def enrich_article(session, article):
+    """Fill in description, news, edit history, traffic patterns, etc."""
+    name = article["article"]
+    (description, headline, edits, access,
+     hourly, reddit, multilang, wikidata) = await asyncio.gather(
+        get_description(session, name),
+        get_news_headline(session, name),
+        get_recent_edits(session, name),
+        get_access_breakdown(session, name),
+        get_hourly_pattern(session, name),
+        get_reddit_mentions(session, name),
+        get_multilang_spike(session, name),
+        get_wikidata_info(session, name),
+    )
+    article["wiki_desc"] = description
+    article["news_headline"] = headline
+    article["recent_edits"] = edits
+    article["access_breakdown"] = access
+    article["hourly_pattern"] = hourly
+    article["reddit_mentions"] = reddit
+    article["multilang_spike"] = multilang
+    article["wikidata_info"] = wikidata
+    article["desc"] = headline if headline else description
 
 
 async def fetch_trending():
@@ -526,7 +529,7 @@ async def fetch_trending():
         batch_size = 10
         for i in range(0, len(candidates), batch_size):
             batch = candidates[i:i + batch_size]
-            tasks = [process_article(session, p["article"], p["views"]) for p in batch]
+            tasks = [check_trending(session, p["article"], p["views"]) for p in batch]
             results = await asyncio.gather(*tasks)
             for r in results:
                 if r:
@@ -537,6 +540,12 @@ async def fetch_trending():
             )
 
         trending.sort(key=lambda x: -x["mult"])
+
+        # Enrich only the articles we'll actually display
+        to_enrich = trending[:DISPLAY_COUNT]
+        if to_enrich:
+            log.info("Enriching top %d trending articles", len(to_enrich))
+            await asyncio.gather(*[enrich_article(session, a) for a in to_enrich])
 
         # Tag articles that were featured on Wikipedia's main page
         for article in trending:

@@ -236,7 +236,6 @@
       align-items: center;
       justify-content: flex-start;
       line-height: 1;
-      min-height: 44px;
     }
     .ocean .item .label {
       font-size: 9px;
@@ -258,24 +257,23 @@
     .ocean .item .val .energy-bar svg { width: 36px; height: 18px; }
     .ocean .item .val .dim { opacity: 0.55; font-weight: 600; font-size: 13px; margin-left: 2px; }
     .ocean .item .val.tide-val {
-      display: grid;
-      grid-template-columns: max-content max-content max-content;
-      column-gap: 5px;
-      row-gap: 3px;
+      display: flex;
+      flex-direction: row;
+      gap: 14px;
       align-items: baseline;
       justify-content: center;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
       letter-spacing: -0.2px;
     }
-    .ocean .item .val.tide-val .arrow { text-align: center; }
-    .ocean .item .val.tide-val .time { text-align: left; min-width: 38px; }
+    .ocean .item .val.tide-val .tide-group {
+      display: flex;
+      gap: 3px;
+      align-items: baseline;
+    }
     .ocean .item .val.tide-val .height {
-      text-align: right;
       opacity: 0.55;
       font-weight: 600;
-      font-size: 12px;
-      min-width: 36px;
     }
     .footer {
       border-top: 1px solid #ccc;
@@ -431,8 +429,8 @@
         <div class="item">
           <span class="label">Tides</span>
           <span class="val tide-val">
-            <span class="arrow">&#8593;</span><span class="time">9:29a</span><span class="height">3.8ft</span>
-            <span class="arrow">&#8595;</span><span class="time">3:22a</span><span class="height">-0.4ft</span>
+            <span class="tide-group"><span class="arrow">&#8593;</span><span class="time">9:29a</span><span class="height">3.8ft</span></span>
+            <span class="tide-group"><span class="arrow">&#8595;</span><span class="time">3:22a</span><span class="height">-0.4ft</span></span>
           </span>
         </div>
       </div>
