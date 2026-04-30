@@ -51,8 +51,8 @@ docker run -d \
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `TRMNL_WEBHOOK_UUID` | Yes | — | From your TRMNL private plugin |
-| `WEATHER_LAT` | No | 32.7157 | Land weather latitude (default: San Diego) |
-| `WEATHER_LON` | No | -117.1611 | Land weather longitude |
+| `WEATHER_LAT` | No | 32.7838 | Land weather latitude (default: San Diego) |
+| `WEATHER_LON` | No | -117.1116 | Land weather longitude |
 | `LOCATION_NAME` | No | San Diego | Footer label |
 | `OCEAN_LAT` | No | 32.8567 | Ocean/marine latitude (default: La Jolla Shores) |
 | `OCEAN_LON` | No | -117.2547 | Ocean/marine longitude |
@@ -74,16 +74,21 @@ docker run -d \
 
 ## Wave energy formula
 
-`E = 0.49 × H² × T`
+`E = (ρg² / 16π) × H² × T² ≈ 1.96 × H² × T²`
 
 - `H` = swell wave height in **meters** (Open-Meteo returns feet, code converts internally)
 - `T` = peak swell period in seconds
-- Output is kW/m of wave crest (= kJ/s/m); displayed as "kJ" matching surf-forecast.com convention
+- Output is wave energy density × wavelength per meter of crest, in kJ
+
+Calibrated against surf-forecast.com's published ranges:
+- ~100 kJ — just about surfable at many breaks
+- 200-1000 kJ — increasingly punchy
+- 1000-5000+ kJ — heavy / dangerous conditions
 
 Sample values:
-- 1m @ 10s ≈ 5 kJ
-- 2m @ 12s ≈ 24 kJ
-- 3m @ 14s ≈ 62 kJ
+- 2ft × 11s ≈ 85 kJ (small)
+- 4ft × 14s ≈ 440 kJ (moderate)
+- 6ft × 16s ≈ 1290 kJ (big)
 
 ## Weather icons
 

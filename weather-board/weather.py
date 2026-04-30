@@ -12,8 +12,8 @@ import requests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("weather-board")
 
-WEATHER_LAT = float(os.getenv("WEATHER_LAT", "32.7157"))
-WEATHER_LON = float(os.getenv("WEATHER_LON", "-117.1611"))
+WEATHER_LAT = float(os.getenv("WEATHER_LAT", "32.78377629393423"))
+WEATHER_LON = float(os.getenv("WEATHER_LON", "-117.11162158373665"))
 LOCATION_NAME = os.getenv("LOCATION_NAME", "San Diego")
 OCEAN_LAT = float(os.getenv("OCEAN_LAT", "32.8567"))
 OCEAN_LON = float(os.getenv("OCEAN_LON", "-117.2547"))
@@ -236,9 +236,12 @@ def build_payload():
             p["swell"] = "{}ft @ {}s {}".format(
                 round(swell_h), round(swell_t), cardinal(swell_d)
             ).strip()
-            # Wave power (kW/m, displayed as kJ): 0.49 * H^2 * T (H in meters)
+            # Wave energy: rho*g^2/(16*pi) * H^2 * T^2 (kJ)
+            # Calibrated against surf-forecast.com ranges:
+            # 100 kJ surfable, 200-1000 punchy, 1000-5000 heavy.
+            # H in meters, T in seconds.
             h_m = swell_h * 0.3048
-            kj = round(0.49 * h_m * h_m * swell_t)
+            kj = round(1.96 * h_m * h_m * swell_t * swell_t)
             p["energy"] = "{} kJ".format(kj)
 
     return {"merge_variables": p}
