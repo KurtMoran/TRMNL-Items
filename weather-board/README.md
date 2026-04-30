@@ -54,8 +54,8 @@ docker run -d \
 | `WEATHER_LAT` | No | 32.7838 | Land weather latitude (default: San Diego) |
 | `WEATHER_LON` | No | -117.1116 | Land weather longitude |
 | `LOCATION_NAME` | No | San Diego | Footer label |
-| `OCEAN_LAT` | No | 32.8567 | Ocean/marine latitude (default: La Jolla Shores) |
-| `OCEAN_LON` | No | -117.2547 | Ocean/marine longitude |
+| `OCEAN_LAT` | No | 32.8541 | Ocean/marine latitude (default: La Jolla Shores) |
+| `OCEAN_LON` | No | -117.2618 | Ocean/marine longitude |
 | `OCEAN_NAME` | No | La Jolla Shores | Ocean section label |
 | `SAME_THRESHOLD` | No | 1 | °F window for "Same as yesterday" |
 | `POLL_INTERVAL_SEC` | No | 900 | Seconds between cycles (default: 15 min) |
