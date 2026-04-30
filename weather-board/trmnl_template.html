@@ -202,7 +202,7 @@
     padding: 10px 24px;
     display: flex;
     align-items: center;
-    gap: 18px;
+    gap: 10px;
     flex-shrink: 0;
   }
   .ocean .ocean-name {
@@ -211,21 +211,23 @@
     text-transform: uppercase;
     letter-spacing: 1.2px;
     font-weight: 700;
-    padding-right: 18px;
+    padding-right: 10px;
     border-right: 2px solid #000;
   }
   .ocean .ocean-data {
     flex: 1;
     display: flex;
-    justify-content: space-around;
   }
   .ocean .item {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: flex-start;
     line-height: 1;
   }
+  .ocean .item:last-child { flex: 1.6; }
   .ocean .item .label {
     font-size: 9px;
     text-transform: uppercase;
@@ -267,17 +269,17 @@
   }
   .footer {
     border-top: 1px solid #ccc;
-    padding: 4px 24px !important;
+    padding: 2px 24px !important;
     display: flex;
     align-items: center;
-    font-size: 10px !important;
-    line-height: 1.2 !important;
+    font-size: 9px !important;
+    line-height: 1 !important;
     flex-shrink: 0;
     font-family: -apple-system, "Helvetica Neue", Arial, sans-serif !important;
   }
   .footer .title {
     font-weight: 700 !important;
-    font-size: 10px !important;
+    font-size: 9px !important;
     text-transform: uppercase;
     letter-spacing: 1px;
     font-family: -apple-system, "Helvetica Neue", Arial, sans-serif !important;
@@ -285,7 +287,7 @@
   .footer .right {
     margin-left: auto;
     opacity: 0.5;
-    font-size: 10px !important;
+    font-size: 9px !important;
     font-family: -apple-system, "Helvetica Neue", Arial, sans-serif !important;
   }
 </style>
