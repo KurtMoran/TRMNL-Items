@@ -97,6 +97,30 @@ def cardinal(deg):
     return dirs[round(deg / 22.5) % 16]
 
 
+def energy_tier(kj):
+    """Map kJ to a 1-5 tier matching surf-forecast.com's energy guide:
+    <100 flat, 100-200 surfable, 200-1000 punchy,
+    1000-5000 heavy, 5000+ dangerous. 0 = no data."""
+    if not isinstance(kj, (int, float)):
+        return 0
+    if kj < 100:
+        return 1
+    if kj < 200:
+        return 2
+    if kj < 1000:
+        return 3
+    if kj < 5000:
+        return 4
+    return 5
+
+
+def fmt_delta(d):
+    """3 -> '+3°', -1 -> '-1°', 0 -> '0°'."""
+    if not isinstance(d, int):
+        return ""
+    return "{:+d}°".format(d) if d != 0 else "0°"
+
+
 def fmt_time(iso_str):
     """ISO datetime ('2026-04-29T06:12') -> '6:12a'."""
     if not iso_str:
@@ -151,7 +175,7 @@ def build_payload():
         "delta": "", "tdelta": "", "feels": "--",
         "wind": "--", "humid": "--", "uv": "--", "rain": "--",
         "rise": "--", "set": "--", "forecast": [],
-        "ocean": "--", "swell": "--", "energy": "--",
+        "ocean": "--", "swell": "--", "energy": "--", "energy_tier": 0,
         "ocean_forecast": [],
     }
 
@@ -222,11 +246,16 @@ def build_payload():
         forecast_days = []
         for i in range(2, 5):
             if i < len(temp_max) and i < len(time_arr):
+                d_hi = temp_max[i]
+                delta_str = ""
+                if isinstance(d_hi, (int, float)) and isinstance(today_hi, (int, float)):
+                    delta_str = fmt_delta(round(d_hi) - round(today_hi))
                 forecast_days.append({
                     "day": day_label(time_arr[i]),
                     "icon": wmo_to_icon(wcodes[i] if i < len(wcodes) else None),
-                    "hi": safe_round(temp_max[i]),
+                    "hi": safe_round(d_hi),
                     "lo": safe_round(temp_min[i]),
+                    "delta": delta_str,
                 })
         p["forecast"] = forecast_days
 
@@ -234,9 +263,19 @@ def build_payload():
         m_daily = marine.get("daily", {})
         m_hourly = marine.get("hourly", {})
 
-        sst = [t for t in m_hourly.get("sea_surface_temperature", []) if t is not None]
-        if sst:
-            p["ocean"] = round(max(sst))
+        # Build per-day max SST from hourly data
+        sst_by_day = {}
+        for ts, t in zip(m_hourly.get("time", []),
+                          m_hourly.get("sea_surface_temperature", [])):
+            if t is None or "T" not in ts:
+                continue
+            d = ts.split("T")[0]
+            if d not in sst_by_day or t > sst_by_day[d]:
+                sst_by_day[d] = t
+
+        today_str = now.strftime("%Y-%m-%d")
+        if today_str in sst_by_day:
+            p["ocean"] = round(sst_by_day[today_str])
 
         swell_h = (m_daily.get("swell_wave_height_max") or [None])[0]
         swell_t = (m_daily.get("swell_wave_period_max") or [None])[0]
@@ -253,6 +292,7 @@ def build_payload():
             h_m = swell_h * 0.3048
             kj = round(1.96 * h_m * h_m * swell_t * swell_t)
             p["energy"] = "{} kJ".format(kj)
+            p["energy_tier"] = energy_tier(kj)
 
         m_time = m_daily.get("time", [])
         sh_arr = m_daily.get("swell_wave_height_max", [])
@@ -262,13 +302,17 @@ def build_payload():
             if i < len(sh_arr) and i < len(st_arr) and i < len(m_time):
                 h = sh_arr[i]
                 t = st_arr[i]
+                date = m_time[i]
                 if isinstance(h, (int, float)) and isinstance(t, (int, float)):
                     h_m_i = h * 0.3048
                     kj_i = round(1.96 * h_m_i * h_m_i * t * t)
+                    day_temp = sst_by_day.get(date)
                     ocean_fc.append({
-                        "day": day_label(m_time[i]),
+                        "day": day_label(date),
+                        "ocean": round(day_temp) if day_temp is not None else "--",
                         "swell": "{}ft {}s".format(round(h), round(t)),
                         "energy": "{} kJ".format(kj_i),
+                        "energy_tier": energy_tier(kj_i),
                     })
         p["ocean_forecast"] = ocean_fc
 

@@ -99,21 +99,21 @@
     display: flex;
     align-items: center;
     font-size: 15px;
-    gap: 10px;
+    gap: 8px;
   }
   .forecast-row .day {
-    flex: 0 0 38px;
+    flex: 0 0 36px;
     font-weight: 700;
     letter-spacing: 0.5px;
   }
   .forecast-row .mini-icon {
-    flex: 0 0 28px;
-    height: 28px;
+    flex: 0 0 26px;
+    height: 26px;
     display: flex;
     align-items: center;
     justify-content: center;
   }
-  .forecast-row .mini-icon svg { width: 28px; height: 28px; }
+  .forecast-row .mini-icon svg { width: 26px; height: 26px; }
   .forecast-row .temps {
     flex: 1;
     text-align: right;
@@ -121,25 +121,48 @@
     letter-spacing: -0.3px;
   }
   .forecast-row .temps .lo { opacity: 0.5; }
+  .forecast-row .delta {
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 700;
+    opacity: 0.55;
+    letter-spacing: -0.3px;
+    min-width: 30px;
+    text-align: right;
+  }
   .ocean-row {
     display: flex;
     align-items: center;
-    font-size: 14px;
-    gap: 10px;
+    font-size: 13px;
+    gap: 6px;
   }
   .ocean-row .day {
-    flex: 0 0 38px;
+    flex: 0 0 36px;
     font-weight: 700;
     letter-spacing: 0.5px;
+  }
+  .ocean-row .ocean-temp {
+    flex: 0 0 36px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
   }
   .ocean-row .swell {
     flex: 1;
     font-weight: 600;
   }
+  .ocean-row .energy-bar {
+    flex: 0 0 30px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+  }
+  .ocean-row .energy-bar svg { width: 30px; height: 16px; }
   .ocean-row .energy {
     flex: 0 0 auto;
     font-weight: 700;
     letter-spacing: -0.3px;
+    min-width: 50px;
+    text-align: right;
   }
   .conditions {
     border-top: 2px solid #000;
@@ -207,7 +230,12 @@
     font-size: 15px;
     font-weight: 700;
     letter-spacing: -0.3px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
+  .ocean .item .val .energy-bar { display: inline-flex; height: 18px; }
+  .ocean .item .val .energy-bar svg { width: 36px; height: 18px; }
   .footer {
     border-top: 1px solid #ccc;
     padding: 4px 24px !important;
@@ -241,6 +269,14 @@
 {% capture svg_rain %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M16 38 Q4 38 4 28 Q4 18 16 18 Q18 8 30 8 Q44 8 46 20 Q58 20 58 30 Q58 38 50 38 Z"/><path d="M18 46 Q14 52 18 56 Q22 52 18 46 Z"/><path d="M32 46 Q28 52 32 56 Q36 52 32 46 Z"/><path d="M46 46 Q42 52 46 56 Q50 52 46 46 Z"/></svg>{% endcapture %}
 {% capture svg_snow %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M16 38 Q4 38 4 28 Q4 18 16 18 Q18 8 30 8 Q44 8 46 20 Q58 20 58 30 Q58 38 50 38 Z"/><g stroke="black" stroke-width="2" stroke-linecap="round" fill="none"><line x1="18" y1="46" x2="18" y2="58"/><line x1="13" y1="52" x2="23" y2="52"/><line x1="14" y1="48" x2="22" y2="56"/><line x1="22" y1="48" x2="14" y2="56"/><line x1="32" y1="46" x2="32" y2="58"/><line x1="27" y1="52" x2="37" y2="52"/><line x1="28" y1="48" x2="36" y2="56"/><line x1="36" y1="48" x2="28" y2="56"/><line x1="46" y1="46" x2="46" y2="58"/><line x1="41" y1="52" x2="51" y2="52"/><line x1="42" y1="48" x2="50" y2="56"/><line x1="50" y1="48" x2="42" y2="56"/></g></svg>{% endcapture %}
 {% capture svg_storm %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M16 38 Q4 38 4 28 Q4 18 16 18 Q18 8 30 8 Q44 8 46 20 Q58 20 58 30 Q58 38 50 38 Z"/><path d="M30 38 L20 56 L30 54 L26 64 L40 44 L30 46 L34 38 Z"/></svg>{% endcapture %}
+
+{% comment %} ===== Wave silhouettes per energy tier ===== {% endcomment %}
+{% capture wave_1 %}<svg viewBox="0 0 64 32" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M 0 30 Q 8 27 16 29 Q 24 31 32 29 Q 40 27 48 29 Q 56 31 64 29 L 64 32 L 0 32 Z"/></svg>{% endcapture %}
+{% capture wave_2 %}<svg viewBox="0 0 64 32" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M 0 30 Q 8 20 16 24 Q 24 28 32 22 Q 40 18 48 22 Q 56 26 64 22 L 64 32 L 0 32 Z"/></svg>{% endcapture %}
+{% capture wave_3 %}<svg viewBox="0 0 64 32" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M 0 30 Q 4 14 12 12 Q 18 12 22 18 Q 26 24 32 28 Q 38 22 42 16 Q 48 10 54 14 Q 60 18 64 16 L 64 32 L 0 32 Z"/></svg>{% endcapture %}
+{% capture wave_4 %}<svg viewBox="0 0 64 32" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M 0 30 Q 4 18 10 10 Q 16 4 24 6 Q 30 8 32 14 L 28 16 Q 26 18 22 18 Q 26 24 30 26 Q 38 28 50 26 Q 58 24 64 26 L 64 32 L 0 32 Z"/></svg>{% endcapture %}
+{% capture wave_5 %}<svg viewBox="0 0 64 32" xmlns="http://www.w3.org/2000/svg"><path d="M 0 30 Q 4 14 10 6 Q 16 0 26 0 Q 36 2 40 8 Q 42 14 38 18 L 32 20 Q 28 20 24 18 Q 28 22 32 24 Q 42 26 56 24 Q 60 24 64 26 L 64 32 L 0 32 Z" fill="black"/><circle cx="22" cy="14" r="1.4" fill="white"/><circle cx="32" cy="6" r="1.4" fill="white"/><circle cx="50" cy="22" r="1.4" fill="white"/></svg>{% endcapture %}
+{% capture wave_0 %}<svg viewBox="0 0 64 32" xmlns="http://www.w3.org/2000/svg"></svg>{% endcapture %}
 
 <div class="screen">
   <div class="top">
@@ -293,6 +329,7 @@
               {% endcase %}
             </span>
             <span class="temps">{{ d.hi }}&deg; <span class="lo">{{ d.lo }}&deg;</span></span>
+            <span class="delta">{{ d.delta }}</span>
           </div>
           {% endfor %}
         </div>
@@ -304,7 +341,18 @@
           {% for o in ocean_forecast %}
           <div class="ocean-row">
             <span class="day">{{ o.day }}</span>
+            <span class="ocean-temp">{{ o.ocean }}&deg;F</span>
             <span class="swell">{{ o.swell }}</span>
+            <span class="energy-bar">
+              {% case o.energy_tier %}
+                {% when 1 %}{{ wave_1 }}
+                {% when 2 %}{{ wave_2 }}
+                {% when 3 %}{{ wave_3 }}
+                {% when 4 %}{{ wave_4 }}
+                {% when 5 %}{{ wave_5 }}
+                {% else %}{{ wave_0 }}
+              {% endcase %}
+            </span>
             <span class="energy">{{ o.energy }}</span>
           </div>
           {% endfor %}
@@ -327,7 +375,22 @@
     <div class="ocean-data">
       <div class="item"><span class="label">Ocean</span><span class="val">{{ ocean }}&deg;F</span></div>
       <div class="item"><span class="label">Swell</span><span class="val">{{ swell }}</span></div>
-      <div class="item"><span class="label">Energy</span><span class="val">{{ energy }}</span></div>
+      <div class="item">
+        <span class="label">Energy</span>
+        <span class="val">
+          <span class="energy-bar">
+            {% case energy_tier %}
+              {% when 1 %}{{ wave_1 }}
+              {% when 2 %}{{ wave_2 }}
+              {% when 3 %}{{ wave_3 }}
+              {% when 4 %}{{ wave_4 }}
+              {% when 5 %}{{ wave_5 }}
+              {% else %}{{ wave_0 }}
+            {% endcase %}
+          </span>
+          {{ energy }}
+        </span>
+      </div>
     </div>
   </div>
 
