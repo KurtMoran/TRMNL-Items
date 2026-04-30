@@ -43,7 +43,7 @@ MARINE_URL = (
     "&daily=wave_height_max,wave_period_max,wave_direction_dominant,"
     "swell_wave_height_max,swell_wave_period_max,swell_wave_direction_dominant"
     "&temperature_unit=fahrenheit&length_unit=imperial"
-    "&timezone={tz}&forecast_days=1"
+    "&timezone={tz}&forecast_days=4"
 ).format(lat=OCEAN_LAT, lon=OCEAN_LON, tz=TZ_NAME)
 
 
@@ -148,10 +148,11 @@ def build_payload():
         "date": now.strftime("%A, %B %d"),
         "updated": now.strftime("%-I:%M %p"),
         "hi": "--", "lo": "--", "icon": "cloud", "phrase": "",
-        "delta": "", "feels": "--",
+        "delta": "", "tdelta": "", "feels": "--",
         "wind": "--", "humid": "--", "uv": "--", "rain": "--",
         "rise": "--", "set": "--", "forecast": [],
         "ocean": "--", "swell": "--", "energy": "--",
+        "ocean_forecast": [],
     }
 
     if forecast:
@@ -183,9 +184,18 @@ def build_payload():
                 if abs(delta) <= SAME_THRESHOLD:
                     p["delta"] = "Same as yesterday"
                 elif delta > 0:
-                    p["delta"] = "{}° warmer than yest.".format(delta)
+                    p["delta"] = "{}° warmer than yesterday".format(delta)
                 else:
-                    p["delta"] = "{}° cooler than yest.".format(abs(delta))
+                    p["delta"] = "{}° cooler than yesterday".format(abs(delta))
+
+            if len(temp_max) >= 3 and isinstance(temp_max[2], (int, float)) and isinstance(today_hi, (int, float)):
+                tdelta = round(temp_max[2]) - round(today_hi)
+                if abs(tdelta) <= SAME_THRESHOLD:
+                    p["tdelta"] = "Tomorrow about the same"
+                elif tdelta > 0:
+                    p["tdelta"] = "Tomorrow {}° warmer".format(tdelta)
+                else:
+                    p["tdelta"] = "Tomorrow {}° cooler".format(abs(tdelta))
 
             p["feels"] = safe_round(current.get("apparent_temperature"))
 
@@ -243,6 +253,24 @@ def build_payload():
             h_m = swell_h * 0.3048
             kj = round(1.96 * h_m * h_m * swell_t * swell_t)
             p["energy"] = "{} kJ".format(kj)
+
+        m_time = m_daily.get("time", [])
+        sh_arr = m_daily.get("swell_wave_height_max", [])
+        st_arr = m_daily.get("swell_wave_period_max", [])
+        ocean_fc = []
+        for i in range(1, 4):
+            if i < len(sh_arr) and i < len(st_arr) and i < len(m_time):
+                h = sh_arr[i]
+                t = st_arr[i]
+                if isinstance(h, (int, float)) and isinstance(t, (int, float)):
+                    h_m_i = h * 0.3048
+                    kj_i = round(1.96 * h_m_i * h_m_i * t * t)
+                    ocean_fc.append({
+                        "day": day_label(m_time[i]),
+                        "swell": "{}ft {}s".format(round(h), round(t)),
+                        "energy": "{} kJ".format(kj_i),
+                    })
+        p["ocean_forecast"] = ocean_fc
 
     return {"merge_variables": p}
 

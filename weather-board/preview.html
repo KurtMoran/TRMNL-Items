@@ -25,21 +25,34 @@
       flex: 1;
       min-height: 0;
       display: flex;
-      padding: 18px 24px 8px;
-      gap: 24px;
+      padding: 14px 24px 8px;
+      gap: 22px;
     }
     .hero {
-      flex: 1.25;
+      flex: 1.2;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .hero-date {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .hero-body {
+      flex: 1;
       display: flex;
       align-items: center;
       gap: 18px;
-      min-width: 0;
+      min-height: 0;
     }
-    .hero-icon { flex: 0 0 130px; height: 130px; display: flex; align-items: center; justify-content: center; }
-    .hero-icon svg { width: 130px; height: 130px; }
+    .hero-icon { flex: 0 0 120px; height: 120px; display: flex; align-items: center; justify-content: center; }
+    .hero-icon svg { width: 120px; height: 120px; }
     .hero-text { flex: 1; min-width: 0; }
     .hero-temps {
-      font-size: 64px;
+      font-size: 60px;
       font-weight: 700;
       line-height: 0.95;
       letter-spacing: -2px;
@@ -49,88 +62,108 @@
     .hero-phrase {
       font-size: 20px;
       font-weight: 600;
-      margin-top: 8px;
+      margin-top: 6px;
     }
     .hero-feels {
       font-size: 13px;
-      margin-top: 6px;
+      margin-top: 4px;
       opacity: 0.7;
     }
-    .hero-delta {
+    .hero-deltas {
+      margin-top: 6px;
       font-size: 13px;
-      margin-top: 2px;
       font-weight: 600;
+      line-height: 1.5;
     }
     .right-col {
       flex: 1;
       display: flex;
       flex-direction: column;
       border-left: 2px solid #000;
-      padding-left: 22px;
+      padding-left: 20px;
       min-width: 0;
+      gap: 6px;
     }
-    .forecast-strip {
+    .col-section {
       flex: 1;
       display: flex;
       flex-direction: column;
-      justify-content: center;
-      gap: 8px;
+      min-height: 0;
+    }
+    .col-section-label {
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      font-weight: 700;
+      opacity: 0.6;
+      margin-bottom: 4px;
+      border-bottom: 1px solid #ccc;
+      padding-bottom: 3px;
+    }
+    .forecast-rows, .ocean-rows {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-around;
     }
     .forecast-row {
       display: flex;
       align-items: center;
-      font-size: 16px;
-      gap: 12px;
+      font-size: 15px;
+      gap: 10px;
     }
     .forecast-row .day {
-      flex: 0 0 46px;
+      flex: 0 0 38px;
       font-weight: 700;
       letter-spacing: 0.5px;
     }
     .forecast-row .mini-icon {
-      flex: 0 0 32px;
-      height: 32px;
+      flex: 0 0 28px;
+      height: 28px;
       display: flex;
       align-items: center;
       justify-content: center;
     }
-    .forecast-row .mini-icon svg { width: 32px; height: 32px; }
+    .forecast-row .mini-icon svg { width: 28px; height: 28px; }
     .forecast-row .temps {
       flex: 1;
       text-align: right;
       font-weight: 600;
-      letter-spacing: -0.5px;
+      letter-spacing: -0.3px;
     }
     .forecast-row .temps .lo { opacity: 0.5; }
-    .sun-times {
+    .ocean-row {
       display: flex;
-      gap: 18px;
-      font-size: 12px;
-      padding-top: 8px;
-      border-top: 1px solid #ccc;
-      justify-content: center;
-      margin-top: 6px;
+      align-items: center;
+      font-size: 14px;
+      gap: 10px;
     }
-    .sun-times span { font-weight: 600; }
-    .sun-times .label {
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      font-size: 10px;
-      opacity: 0.6;
+    .ocean-row .day {
+      flex: 0 0 38px;
       font-weight: 700;
-      margin-right: 4px;
+      letter-spacing: 0.5px;
+    }
+    .ocean-row .swell {
+      flex: 1;
+      font-weight: 600;
+    }
+    .ocean-row .energy {
+      flex: 0 0 auto;
+      font-weight: 700;
+      letter-spacing: -0.3px;
     }
     .conditions {
       border-top: 2px solid #000;
       padding: 8px 24px;
       display: flex;
       justify-content: space-around;
+      flex-shrink: 0;
     }
     .cond-item {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 1px;
+      line-height: 1;
     }
     .cond-item .label {
       font-size: 9px;
@@ -138,9 +171,10 @@
       letter-spacing: 1px;
       opacity: 0.6;
       font-weight: 700;
+      margin-bottom: 4px;
     }
     .cond-item .val {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 700;
       letter-spacing: -0.3px;
     }
@@ -149,13 +183,17 @@
       padding: 10px 24px;
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 18px;
+      flex-shrink: 0;
     }
     .ocean .ocean-name {
+      flex: 0 0 auto;
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 1.2px;
       font-weight: 700;
+      padding-right: 18px;
+      border-right: 2px solid #000;
     }
     .ocean .ocean-data {
       flex: 1;
@@ -166,7 +204,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 1px;
+      line-height: 1;
     }
     .ocean .item .label {
       font-size: 9px;
@@ -174,6 +212,7 @@
       letter-spacing: 1px;
       opacity: 0.6;
       font-weight: 700;
+      margin-bottom: 5px;
     }
     .ocean .item .val {
       font-size: 15px;
@@ -182,114 +221,137 @@
     }
     .footer {
       border-top: 1px solid #ccc;
-      padding: 5px 24px;
+      padding: 4px 24px;
       display: flex;
       align-items: center;
-      font-size: 11px;
+      font-size: 10px;
+      line-height: 1.2;
       flex-shrink: 0;
+      font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
     }
-    .footer .title { font-weight: bold; }
-    .footer .meta { margin-left: 12px; opacity: 0.5; }
-    .footer .right { margin-left: auto; opacity: 0.5; }
+    .footer .title {
+      font-weight: 700;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .footer .right {
+      margin-left: auto;
+      opacity: 0.5;
+      font-size: 10px;
+    }
   </style>
 </head>
 <body>
   <div class="screen">
     <div class="top">
       <div class="hero">
-        <div class="hero-icon">
-          <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black">
-            <circle cx="26" cy="22" r="11"/>
-            <rect x="24" y="2" width="4" height="7" rx="2"/>
-            <rect x="2" y="20" width="7" height="4" rx="2"/>
-            <rect x="42" y="20" width="7" height="4" rx="2"/>
-            <rect x="9" y="7" width="4" height="7" rx="2" transform="rotate(-45 11 10)"/>
-            <rect x="40" y="7" width="4" height="7" rx="2" transform="rotate(45 42 10)"/>
-            <path d="M28 58 Q18 58 18 50 Q18 42 28 42 Q30 36 40 36 Q50 36 52 44 Q60 44 60 50 Q60 58 52 58 Z"/>
-          </svg>
-        </div>
-        <div class="hero-text">
-          <div class="hero-temps">72&deg;<span class="sep">/</span><span class="lo">58&deg;</span></div>
-          <div class="hero-phrase">Mostly clear</div>
-          <div class="hero-feels">Feels like 70&deg;</div>
-          <div class="hero-delta">3&deg; cooler than yest.</div>
+        <div class="hero-date">Wednesday, April 29</div>
+        <div class="hero-body">
+          <div class="hero-icon">
+            <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black">
+              <path d="M16 30 Q4 30 4 22 Q4 12 16 12 Q18 4 30 4 Q44 4 46 14 Q56 14 56 22 Q56 30 48 30 Z"/>
+              <rect x="6" y="40" width="52" height="4" rx="2"/>
+              <rect x="14" y="48" width="40" height="4" rx="2"/>
+              <rect x="6" y="56" width="52" height="4" rx="2"/>
+            </svg>
+          </div>
+          <div class="hero-text">
+            <div class="hero-temps">72&deg;<span class="sep">/</span><span class="lo">51&deg;</span></div>
+            <div class="hero-phrase">Foggy</div>
+            <div class="hero-feels">Feels like 60&deg;</div>
+            <div class="hero-deltas">
+              <div>2&deg; warmer than yesterday</div>
+              <div>Tomorrow about the same</div>
+            </div>
+          </div>
         </div>
       </div>
 
       <div class="right-col">
-        <div class="forecast-strip">
-          <div class="forecast-row">
-            <span class="day">TUE</span>
-            <span class="mini-icon">
-              <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black">
-                <circle cx="32" cy="32" r="12"/>
-                <rect x="30" y="2" width="4" height="8" rx="2"/>
-                <rect x="30" y="54" width="4" height="8" rx="2"/>
-                <rect x="2" y="30" width="8" height="4" rx="2"/>
-                <rect x="54" y="30" width="8" height="4" rx="2"/>
-                <rect x="9" y="11" width="4" height="8" rx="2" transform="rotate(-45 11 15)"/>
-                <rect x="51" y="45" width="4" height="8" rx="2" transform="rotate(-45 53 49)"/>
-                <rect x="9" y="45" width="4" height="8" rx="2" transform="rotate(45 11 49)"/>
-                <rect x="51" y="11" width="4" height="8" rx="2" transform="rotate(45 53 15)"/>
-              </svg>
-            </span>
-            <span class="temps">74&deg; <span class="lo">59&deg;</span></span>
-          </div>
-          <div class="forecast-row">
-            <span class="day">WED</span>
-            <span class="mini-icon">
-              <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black">
-                <circle cx="22" cy="20" r="9"/>
-                <rect x="20" y="2" width="4" height="6" rx="2"/>
-                <rect x="2" y="18" width="6" height="4" rx="2"/>
-                <rect x="36" y="18" width="6" height="4" rx="2"/>
-                <rect x="6" y="6" width="4" height="6" rx="2" transform="rotate(-45 8 9)"/>
-                <rect x="34" y="6" width="4" height="6" rx="2" transform="rotate(45 36 9)"/>
-                <path d="M22 56 Q10 56 10 46 Q10 36 22 36 Q24 28 36 28 Q48 28 50 38 Q60 38 60 46 Q60 56 52 56 Z"/>
-              </svg>
-            </span>
-            <span class="temps">70&deg; <span class="lo">57&deg;</span></span>
-          </div>
-          <div class="forecast-row">
-            <span class="day">THU</span>
-            <span class="mini-icon">
-              <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black">
-                <path d="M16 38 Q4 38 4 28 Q4 18 16 18 Q18 8 30 8 Q44 8 46 20 Q58 20 58 30 Q58 38 50 38 Z"/>
-                <path d="M18 46 Q14 52 18 56 Q22 52 18 46 Z"/>
-                <path d="M32 46 Q28 52 32 56 Q36 52 32 46 Z"/>
-                <path d="M46 46 Q42 52 46 56 Q50 52 46 46 Z"/>
-              </svg>
-            </span>
-            <span class="temps">65&deg; <span class="lo">55&deg;</span></span>
+        <div class="col-section">
+          <div class="col-section-label">3-Day Forecast</div>
+          <div class="forecast-rows">
+            <div class="forecast-row">
+              <span class="day">THU</span>
+              <span class="mini-icon">
+                <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black">
+                  <path d="M16 50 Q4 50 4 38 Q4 26 16 26 Q18 14 32 14 Q46 14 48 28 Q60 28 60 40 Q60 50 50 50 Z"/>
+                </svg>
+              </span>
+              <span class="temps">71&deg; <span class="lo">54&deg;</span></span>
+            </div>
+            <div class="forecast-row">
+              <span class="day">FRI</span>
+              <span class="mini-icon">
+                <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black">
+                  <path d="M16 50 Q4 50 4 38 Q4 26 16 26 Q18 14 32 14 Q46 14 48 28 Q60 28 60 40 Q60 50 50 50 Z"/>
+                </svg>
+              </span>
+              <span class="temps">71&deg; <span class="lo">59&deg;</span></span>
+            </div>
+            <div class="forecast-row">
+              <span class="day">SAT</span>
+              <span class="mini-icon">
+                <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black">
+                  <circle cx="22" cy="20" r="9"/>
+                  <rect x="20" y="2" width="4" height="6" rx="2"/>
+                  <rect x="2" y="18" width="6" height="4" rx="2"/>
+                  <rect x="36" y="18" width="6" height="4" rx="2"/>
+                  <rect x="6" y="6" width="4" height="6" rx="2" transform="rotate(-45 8 9)"/>
+                  <rect x="34" y="6" width="4" height="6" rx="2" transform="rotate(45 36 9)"/>
+                  <path d="M22 56 Q10 56 10 46 Q10 36 22 36 Q24 28 36 28 Q48 28 50 38 Q60 38 60 46 Q60 56 52 56 Z"/>
+                </svg>
+              </span>
+              <span class="temps">74&deg; <span class="lo">60&deg;</span></span>
+            </div>
           </div>
         </div>
-        <div class="sun-times">
-          <span><span class="label">Rise</span>6:12a</span>
-          <span><span class="label">Set</span>7:38p</span>
+
+        <div class="col-section">
+          <div class="col-section-label">Ocean Forecast</div>
+          <div class="ocean-rows">
+            <div class="ocean-row">
+              <span class="day">THU</span>
+              <span class="swell">3ft 6s</span>
+              <span class="energy">41 kJ</span>
+            </div>
+            <div class="ocean-row">
+              <span class="day">FRI</span>
+              <span class="swell">3ft 5s</span>
+              <span class="energy">57 kJ</span>
+            </div>
+            <div class="ocean-row">
+              <span class="day">SAT</span>
+              <span class="swell">2ft 15s</span>
+              <span class="energy">265 kJ</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
     <div class="conditions">
-      <div class="cond-item"><span class="label">Wind</span><span class="val">8 mph WSW</span></div>
-      <div class="cond-item"><span class="label">Humidity</span><span class="val">62%</span></div>
-      <div class="cond-item"><span class="label">UV Index</span><span class="val">7</span></div>
-      <div class="cond-item"><span class="label">Rain</span><span class="val">10%</span></div>
+      <div class="cond-item"><span class="label">Wind</span><span class="val">5 mph WNW</span></div>
+      <div class="cond-item"><span class="label">Humidity</span><span class="val">68%</span></div>
+      <div class="cond-item"><span class="label">UV Index</span><span class="val">8</span></div>
+      <div class="cond-item"><span class="label">Rain</span><span class="val">0%</span></div>
+      <div class="cond-item"><span class="label">Sunrise</span><span class="val">6:02a</span></div>
+      <div class="cond-item"><span class="label">Sunset</span><span class="val">7:28p</span></div>
     </div>
 
     <div class="ocean">
       <div class="ocean-name">La Jolla Shores</div>
       <div class="ocean-data">
-        <div class="item"><span class="label">Ocean</span><span class="val">64&deg;F</span></div>
-        <div class="item"><span class="label">Swell</span><span class="val">4ft @ 14s WSW</span></div>
-        <div class="item"><span class="label">Energy</span><span class="val">24 kJ</span></div>
+        <div class="item"><span class="label">Ocean</span><span class="val">65&deg;F</span></div>
+        <div class="item"><span class="label">Swell</span><span class="val">2ft @ 11s WSW</span></div>
+        <div class="item"><span class="label">Energy</span><span class="val">66 kJ</span></div>
       </div>
     </div>
 
     <div class="footer">
       <span class="title">San Diego Weather</span>
-      <span class="meta">Wednesday, April 29</span>
-      <span class="right">Updated 2:15 PM</span>
+      <span class="right">Updated 7:55 PM</span>
     </div>
   </div>
 </body>
