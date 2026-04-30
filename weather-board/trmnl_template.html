@@ -190,6 +190,13 @@
     font-weight: 700;
     letter-spacing: -0.3px;
   }
+  .cond-item .sublabel {
+    font-size: 9px;
+    font-weight: 600;
+    opacity: 0.55;
+    margin-top: 3px;
+    letter-spacing: 0.3px;
+  }
   .ocean {
     border-top: 2px solid #000;
     padding: 10px 24px;
@@ -216,7 +223,9 @@
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: flex-start;
     line-height: 1;
+    min-height: 44px;
   }
   .ocean .item .label {
     font-size: 9px;
@@ -224,7 +233,7 @@
     letter-spacing: 1px;
     opacity: 0.6;
     font-weight: 700;
-    margin-bottom: 5px;
+    margin-bottom: 6px;
   }
   .ocean .item .val {
     font-size: 15px;
@@ -236,6 +245,27 @@
   }
   .ocean .item .val .energy-bar { display: inline-flex; height: 18px; }
   .ocean .item .val .energy-bar svg { width: 36px; height: 18px; }
+  .ocean .item .val .dim { opacity: 0.55; font-weight: 600; font-size: 13px; margin-left: 2px; }
+  .ocean .item .val.tide-val {
+    display: grid;
+    grid-template-columns: max-content max-content max-content;
+    column-gap: 5px;
+    row-gap: 3px;
+    align-items: baseline;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+  }
+  .ocean .item .val.tide-val .arrow { text-align: center; }
+  .ocean .item .val.tide-val .time { text-align: left; min-width: 38px; }
+  .ocean .item .val.tide-val .height {
+    text-align: right;
+    opacity: 0.55;
+    font-weight: 600;
+    font-size: 12px;
+    min-width: 36px;
+  }
   .footer {
     border-top: 1px solid #ccc;
     padding: 4px 24px !important;
@@ -366,6 +396,7 @@
     <div class="cond-item"><span class="label">Humidity</span><span class="val">{{ humid }}</span></div>
     <div class="cond-item"><span class="label">UV Index</span><span class="val">{{ uv }}</span></div>
     <div class="cond-item"><span class="label">Rain</span><span class="val">{{ rain }}</span></div>
+    <div class="cond-item"><span class="label">AQI</span><span class="val">{{ aqi }}</span><span class="sublabel">{{ aqi_label }}</span></div>
     <div class="cond-item"><span class="label">Sunrise</span><span class="val">{{ rise }}</span></div>
     <div class="cond-item"><span class="label">Sunset</span><span class="val">{{ set }}</span></div>
   </div>
@@ -389,6 +420,13 @@
             {% endcase %}
           </span>
           {{ energy }}
+        </span>
+      </div>
+      <div class="item">
+        <span class="label">Tides</span>
+        <span class="val tide-val">
+          <span class="arrow">&#8593;</span><span class="time">{{ high_time }}</span><span class="height">{{ high_height }}</span>
+          <span class="arrow">&#8595;</span><span class="time">{{ low_time }}</span><span class="height">{{ low_height }}</span>
         </span>
       </div>
     </div>

@@ -6,7 +6,7 @@ today's weather, ocean conditions, and 3-day forecast to a TRMNL
 display via webhook.
 """
 import json, logging, os, time
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -24,6 +24,7 @@ TZ_NAME = os.getenv("TZ", "America/Los_Angeles")
 TRMNL_WEBHOOK_UUID = os.getenv("TRMNL_WEBHOOK_UUID", "")
 TRMNL_API_URL = "https://trmnl.com/api/custom_plugins"
 DATA_FILE = os.getenv("DATA_FILE", "/data/weather_state.json")
+TIDE_STATION_ID = os.getenv("TIDE_STATION_ID", "9410230")  # NOAA La Jolla (Scripps Pier)
 
 FORECAST_URL = (
     "https://api.open-meteo.com/v1/forecast"
@@ -45,6 +46,13 @@ MARINE_URL = (
     "&temperature_unit=fahrenheit&length_unit=imperial"
     "&timezone={tz}&forecast_days=4"
 ).format(lat=OCEAN_LAT, lon=OCEAN_LON, tz=TZ_NAME)
+
+AIR_QUALITY_URL = (
+    "https://air-quality-api.open-meteo.com/v1/air-quality"
+    "?latitude={lat}&longitude={lon}"
+    "&current=us_aqi"
+    "&timezone={tz}"
+).format(lat=WEATHER_LAT, lon=WEATHER_LON, tz=TZ_NAME)
 
 
 def wmo_to_icon(code):
@@ -121,6 +129,44 @@ def fmt_delta(d):
     return "{:+d}°".format(d) if d != 0 else "0°"
 
 
+def aqi_label(aqi):
+    """US AQI category."""
+    if aqi <= 50:
+        return "Good"
+    if aqi <= 100:
+        return "Moderate"
+    if aqi <= 150:
+        return "Unhealthy*"
+    if aqi <= 200:
+        return "Unhealthy"
+    if aqi <= 300:
+        return "V. Unhealthy"
+    return "Hazardous"
+
+
+def tide_url():
+    """NOAA CO-OPS predictions URL covering today + tomorrow."""
+    today = datetime.now()
+    tomorrow = today + timedelta(days=1)
+    return (
+        "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+        "?product=predictions"
+        "&application=trmnl-weather"
+        "&begin_date={start}"
+        "&end_date={end}"
+        "&datum=MLLW"
+        "&station={station}"
+        "&time_zone=lst_ldt"
+        "&units=english"
+        "&interval=hilo"
+        "&format=json"
+    ).format(
+        start=today.strftime("%Y%m%d"),
+        end=tomorrow.strftime("%Y%m%d"),
+        station=TIDE_STATION_ID,
+    )
+
+
 def fmt_time(iso_str):
     """ISO datetime ('2026-04-29T06:12') -> '6:12a'."""
     if not iso_str:
@@ -177,6 +223,9 @@ def build_payload():
         "rise": "--", "set": "--", "forecast": [],
         "ocean": "--", "swell": "--", "energy": "--", "energy_tier": 0,
         "ocean_forecast": [],
+        "aqi": "--", "aqi_label": "",
+        "high_time": "--", "high_height": "",
+        "low_time": "--", "low_height": "",
     }
 
     if forecast:
@@ -315,6 +364,42 @@ def build_payload():
                         "energy_tier": energy_tier(kj_i),
                     })
         p["ocean_forecast"] = ocean_fc
+
+    aqi_data = fetch_json(AIR_QUALITY_URL, "AirQuality")
+    if aqi_data:
+        us_aqi = aqi_data.get("current", {}).get("us_aqi")
+        if isinstance(us_aqi, (int, float)):
+            p["aqi"] = round(us_aqi)
+            p["aqi_label"] = aqi_label(us_aqi)
+
+    tide_data = fetch_json(tide_url(), "Tides")
+    if tide_data:
+        next_high = None
+        next_low = None
+        for pred in tide_data.get("predictions", []):
+            try:
+                t_dt = datetime.strptime(pred["t"], "%Y-%m-%d %H:%M")
+            except (ValueError, KeyError):
+                continue
+            if t_dt <= now:
+                continue
+            kind = pred.get("type", "")
+            try:
+                height = float(pred.get("v", 0))
+            except (TypeError, ValueError):
+                height = 0.0
+            if kind == "H" and next_high is None:
+                next_high = (t_dt, height)
+            elif kind == "L" and next_low is None:
+                next_low = (t_dt, height)
+            if next_high and next_low:
+                break
+        if next_high:
+            p["high_time"] = fmt_time(next_high[0].isoformat())
+            p["high_height"] = "{:.1f}ft".format(next_high[1])
+        if next_low:
+            p["low_time"] = fmt_time(next_low[0].isoformat())
+            p["low_height"] = "{:.1f}ft".format(next_low[1])
 
     return {"merge_variables": p}
 
