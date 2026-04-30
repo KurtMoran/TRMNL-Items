@@ -10,6 +10,9 @@ Tracks daily flight activity at a local airport using ADS-B data. Shows arrivals
 ### [Wiki Trending](wiki-trending/)
 Shows Wikipedia articles trending well above their normal traffic, with AI-generated explanations of why each article is spiking. Uses Google Gemini with web search grounding, with fallbacks to Google News headlines and Wikipedia intros.
 
+### [TRMNL Weather](weather-board/)
+Today's land weather + 3-day forecast + ocean/surf conditions for a coastal beach break. Shows high/low (with comparison to yesterday), feels-like, wind, humidity, UV, rain chance, sunrise/sunset, ocean temperature, swell height/period/direction, and computed wave energy in kJ. Uses Open-Meteo Forecast and Marine APIs. Defaults to San Diego + La Jolla Shores; configurable via env vars.
+
 ---
 
 ## How It Works
@@ -107,6 +110,18 @@ docker run -d --name wiki-trending --restart unless-stopped \
   wiki-trending
 ```
 
+**TRMNL Weather:**
+
+```bash
+cd weather-board
+docker build --no-cache -t weather-board .
+docker run -d --name weather-board --restart unless-stopped \
+  -e TZ=America/Los_Angeles \
+  -e TRMNL_WEBHOOK_UUID=your-uuid-here \
+  -v $(pwd)/data:/data \
+  weather-board
+```
+
 See each project's README for the full list of environment variables.
 
 ---
@@ -128,6 +143,7 @@ The recommended way to run this is via the **User Scripts** plugin on Unraid wit
 export GEMINI_API_KEY="your-gemini-api-key"
 export AIRPORT_WEBHOOK_UUID="your-airport-webhook-uuid"
 export WIKI_WEBHOOK_UUID="your-wiki-webhook-uuid"
+export WEATHER_WEBHOOK_UUID="your-weather-webhook-uuid"
 bash /mnt/user/appdata/TRMNL-Items/update.sh
 ```
 
@@ -143,6 +159,7 @@ You can also run `update.sh` directly from the server terminal:
 export GEMINI_API_KEY="your-gemini-api-key"
 export AIRPORT_WEBHOOK_UUID="your-airport-webhook-uuid"
 export WIKI_WEBHOOK_UUID="your-wiki-webhook-uuid"
+export WEATHER_WEBHOOK_UUID="your-weather-webhook-uuid"
 bash /mnt/user/appdata/TRMNL-Items/update.sh
 ```
 

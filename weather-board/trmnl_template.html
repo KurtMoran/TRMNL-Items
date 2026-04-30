@@ -1,0 +1,269 @@
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  .screen {
+    width: 800px;
+    height: 480px;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #000;
+  }
+  .top {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    padding: 18px 24px 8px;
+    gap: 24px;
+  }
+  .hero {
+    flex: 1.25;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    min-width: 0;
+  }
+  .hero-icon { flex: 0 0 130px; height: 130px; display: flex; align-items: center; justify-content: center; }
+  .hero-icon svg { width: 130px; height: 130px; }
+  .hero-text { flex: 1; min-width: 0; }
+  .hero-temps {
+    font-size: 64px;
+    font-weight: 700;
+    line-height: 0.95;
+    letter-spacing: -2px;
+  }
+  .hero-temps .sep { opacity: 0.35; margin: 0 2px; font-weight: 500; }
+  .hero-temps .lo { opacity: 0.5; }
+  .hero-phrase {
+    font-size: 20px;
+    font-weight: 600;
+    margin-top: 8px;
+  }
+  .hero-feels {
+    font-size: 13px;
+    margin-top: 6px;
+    opacity: 0.7;
+  }
+  .hero-delta {
+    font-size: 13px;
+    margin-top: 2px;
+    font-weight: 600;
+  }
+  .right-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    border-left: 2px solid #000;
+    padding-left: 22px;
+    min-width: 0;
+  }
+  .forecast-strip {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
+  }
+  .forecast-row {
+    display: flex;
+    align-items: center;
+    font-size: 16px;
+    gap: 12px;
+  }
+  .forecast-row .day {
+    flex: 0 0 46px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+  .forecast-row .mini-icon {
+    flex: 0 0 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .forecast-row .mini-icon svg { width: 32px; height: 32px; }
+  .forecast-row .temps {
+    flex: 1;
+    text-align: right;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+  }
+  .forecast-row .temps .lo { opacity: 0.5; }
+  .sun-times {
+    display: flex;
+    gap: 18px;
+    font-size: 12px;
+    padding-top: 8px;
+    border-top: 1px solid #ccc;
+    justify-content: center;
+    margin-top: 6px;
+  }
+  .sun-times span { font-weight: 600; }
+  .sun-times .label {
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 10px;
+    opacity: 0.6;
+    font-weight: 700;
+    margin-right: 4px;
+  }
+  .conditions {
+    border-top: 2px solid #000;
+    padding: 8px 24px;
+    display: flex;
+    justify-content: space-around;
+  }
+  .cond-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+  }
+  .cond-item .label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    opacity: 0.6;
+    font-weight: 700;
+  }
+  .cond-item .val {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+  .ocean {
+    border-top: 2px solid #000;
+    padding: 10px 24px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .ocean .ocean-name {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    font-weight: 700;
+  }
+  .ocean .ocean-data {
+    flex: 1;
+    display: flex;
+    justify-content: space-around;
+  }
+  .ocean .item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+  }
+  .ocean .item .label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    opacity: 0.6;
+    font-weight: 700;
+  }
+  .ocean .item .val {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+  .footer {
+    border-top: 1px solid #ccc;
+    padding: 5px 24px;
+    display: flex;
+    align-items: center;
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+  .footer .title { font-weight: bold; }
+  .footer .meta { margin-left: 12px; opacity: 0.5; }
+  .footer .right { margin-left: auto; opacity: 0.5; }
+</style>
+
+{% comment %} ===== Reusable SVG icon block ===== {% endcomment %}
+{% capture svg_sun %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><circle cx="32" cy="32" r="12"/><rect x="30" y="2" width="4" height="8" rx="2"/><rect x="30" y="54" width="4" height="8" rx="2"/><rect x="2" y="30" width="8" height="4" rx="2"/><rect x="54" y="30" width="8" height="4" rx="2"/><rect x="9" y="11" width="4" height="8" rx="2" transform="rotate(-45 11 15)"/><rect x="51" y="45" width="4" height="8" rx="2" transform="rotate(-45 53 49)"/><rect x="9" y="45" width="4" height="8" rx="2" transform="rotate(45 11 49)"/><rect x="51" y="11" width="4" height="8" rx="2" transform="rotate(45 53 15)"/></svg>{% endcapture %}
+{% capture svg_cloud %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M16 50 Q4 50 4 38 Q4 26 16 26 Q18 14 32 14 Q46 14 48 28 Q60 28 60 40 Q60 50 50 50 Z"/></svg>{% endcapture %}
+{% capture svg_partly %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><circle cx="22" cy="20" r="9"/><rect x="20" y="2" width="4" height="6" rx="2"/><rect x="2" y="18" width="6" height="4" rx="2"/><rect x="36" y="18" width="6" height="4" rx="2"/><rect x="6" y="6" width="4" height="6" rx="2" transform="rotate(-45 8 9)"/><rect x="34" y="6" width="4" height="6" rx="2" transform="rotate(45 36 9)"/><path d="M22 56 Q10 56 10 46 Q10 36 22 36 Q24 28 36 28 Q48 28 50 38 Q60 38 60 46 Q60 56 52 56 Z"/></svg>{% endcapture %}
+{% capture svg_suncloud %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><circle cx="26" cy="22" r="11"/><rect x="24" y="2" width="4" height="7" rx="2"/><rect x="2" y="20" width="7" height="4" rx="2"/><rect x="42" y="20" width="7" height="4" rx="2"/><rect x="9" y="7" width="4" height="7" rx="2" transform="rotate(-45 11 10)"/><rect x="40" y="7" width="4" height="7" rx="2" transform="rotate(45 42 10)"/><path d="M28 58 Q18 58 18 50 Q18 42 28 42 Q30 36 40 36 Q50 36 52 44 Q60 44 60 50 Q60 58 52 58 Z"/></svg>{% endcapture %}
+{% capture svg_fog %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M16 30 Q4 30 4 22 Q4 12 16 12 Q18 4 30 4 Q44 4 46 14 Q56 14 56 22 Q56 30 48 30 Z"/><rect x="6" y="40" width="52" height="4" rx="2"/><rect x="14" y="48" width="40" height="4" rx="2"/><rect x="6" y="56" width="52" height="4" rx="2"/></svg>{% endcapture %}
+{% capture svg_rain %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M16 38 Q4 38 4 28 Q4 18 16 18 Q18 8 30 8 Q44 8 46 20 Q58 20 58 30 Q58 38 50 38 Z"/><path d="M18 46 Q14 52 18 56 Q22 52 18 46 Z"/><path d="M32 46 Q28 52 32 56 Q36 52 32 46 Z"/><path d="M46 46 Q42 52 46 56 Q50 52 46 46 Z"/></svg>{% endcapture %}
+{% capture svg_snow %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M16 38 Q4 38 4 28 Q4 18 16 18 Q18 8 30 8 Q44 8 46 20 Q58 20 58 30 Q58 38 50 38 Z"/><g stroke="black" stroke-width="2" stroke-linecap="round" fill="none"><line x1="18" y1="46" x2="18" y2="58"/><line x1="13" y1="52" x2="23" y2="52"/><line x1="14" y1="48" x2="22" y2="56"/><line x1="22" y1="48" x2="14" y2="56"/><line x1="32" y1="46" x2="32" y2="58"/><line x1="27" y1="52" x2="37" y2="52"/><line x1="28" y1="48" x2="36" y2="56"/><line x1="36" y1="48" x2="28" y2="56"/><line x1="46" y1="46" x2="46" y2="58"/><line x1="41" y1="52" x2="51" y2="52"/><line x1="42" y1="48" x2="50" y2="56"/><line x1="50" y1="48" x2="42" y2="56"/></g></svg>{% endcapture %}
+{% capture svg_storm %}<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M16 38 Q4 38 4 28 Q4 18 16 18 Q18 8 30 8 Q44 8 46 20 Q58 20 58 30 Q58 38 50 38 Z"/><path d="M30 38 L20 56 L30 54 L26 64 L40 44 L30 46 L34 38 Z"/></svg>{% endcapture %}
+
+<div class="screen">
+  <div class="top">
+    <div class="hero">
+      <div class="hero-icon">
+        {% case icon %}
+          {% when 'sun' %}{{ svg_sun }}
+          {% when 'sun-cloud' %}{{ svg_suncloud }}
+          {% when 'partly-cloudy' %}{{ svg_partly }}
+          {% when 'cloud' %}{{ svg_cloud }}
+          {% when 'fog' %}{{ svg_fog }}
+          {% when 'rain' %}{{ svg_rain }}
+          {% when 'snow' %}{{ svg_snow }}
+          {% when 'storm' %}{{ svg_storm }}
+          {% else %}{{ svg_cloud }}
+        {% endcase %}
+      </div>
+      <div class="hero-text">
+        <div class="hero-temps">{{ hi }}&deg;<span class="sep">/</span><span class="lo">{{ lo }}&deg;</span></div>
+        <div class="hero-phrase">{{ phrase }}</div>
+        <div class="hero-feels">Feels like {{ feels }}&deg;</div>
+        <div class="hero-delta">{{ delta }}</div>
+      </div>
+    </div>
+
+    <div class="right-col">
+      <div class="forecast-strip">
+        {% for d in forecast %}
+        <div class="forecast-row">
+          <span class="day">{{ d.day }}</span>
+          <span class="mini-icon">
+            {% case d.icon %}
+              {% when 'sun' %}{{ svg_sun }}
+              {% when 'sun-cloud' %}{{ svg_suncloud }}
+              {% when 'partly-cloudy' %}{{ svg_partly }}
+              {% when 'cloud' %}{{ svg_cloud }}
+              {% when 'fog' %}{{ svg_fog }}
+              {% when 'rain' %}{{ svg_rain }}
+              {% when 'snow' %}{{ svg_snow }}
+              {% when 'storm' %}{{ svg_storm }}
+              {% else %}{{ svg_cloud }}
+            {% endcase %}
+          </span>
+          <span class="temps">{{ d.hi }}&deg; <span class="lo">{{ d.lo }}&deg;</span></span>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="sun-times">
+        <span><span class="label">Rise</span>{{ rise }}</span>
+        <span><span class="label">Set</span>{{ set }}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="conditions">
+    <div class="cond-item"><span class="label">Wind</span><span class="val">{{ wind }}</span></div>
+    <div class="cond-item"><span class="label">Humidity</span><span class="val">{{ humid }}</span></div>
+    <div class="cond-item"><span class="label">UV Index</span><span class="val">{{ uv }}</span></div>
+    <div class="cond-item"><span class="label">Rain</span><span class="val">{{ rain }}</span></div>
+  </div>
+
+  <div class="ocean">
+    <div class="ocean-name">{{ ocean_loc }}</div>
+    <div class="ocean-data">
+      <div class="item"><span class="label">Ocean</span><span class="val">{{ ocean }}&deg;F</span></div>
+      <div class="item"><span class="label">Swell</span><span class="val">{{ swell }}</span></div>
+      <div class="item"><span class="label">Energy</span><span class="val">{{ energy }}</span></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span class="title">{{ loc }} Weather</span>
+    <span class="meta">{{ date }}</span>
+    <span class="right">Updated {{ updated }}</span>
+  </div>
+</div>

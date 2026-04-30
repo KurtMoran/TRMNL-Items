@@ -9,6 +9,7 @@
 GEMINI_API_KEY="${GEMINI_API_KEY:?Set GEMINI_API_KEY}"
 AIRPORT_WEBHOOK_UUID="${AIRPORT_WEBHOOK_UUID:?Set AIRPORT_WEBHOOK_UUID}"
 WIKI_WEBHOOK_UUID="${WIKI_WEBHOOK_UUID:?Set WIKI_WEBHOOK_UUID}"
+WEATHER_WEBHOOK_UUID="${WEATHER_WEBHOOK_UUID:?Set WEATHER_WEBHOOK_UUID}"
 
 cd /mnt/user/appdata/TRMNL-Items
 
@@ -52,6 +53,17 @@ docker run -d --name wiki-trending --restart unless-stopped \
     -e GEMINI_API_KEY="$GEMINI_API_KEY" \
     -v /mnt/user/appdata/TRMNL-Items/wiki-trending/data:/data \
     wiki-trending
+
+# --- Weather Board ---
+echo "Rebuilding weather board..."
+docker stop weather-board 2>/dev/null
+docker rm weather-board 2>/dev/null
+docker build --no-cache -t weather-board ./weather-board/
+docker run -d --name weather-board --restart unless-stopped \
+    -e TZ=America/Los_Angeles \
+    -e TRMNL_WEBHOOK_UUID="$WEATHER_WEBHOOK_UUID" \
+    -v /mnt/user/appdata/TRMNL-Items/weather-board/data:/data \
+    weather-board
 
 # Clean up old images
 docker image prune -f
