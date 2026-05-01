@@ -599,7 +599,11 @@ async def fetch_trending():
         if to_enrich:
             log.info("Enriching top %d trending articles", len(to_enrich))
             for article in to_enrich:
-                await enrich_article(session, article)
+                try:
+                    await enrich_article(session, article)
+                except Exception as e:
+                    log.warning("Enrichment failed for %s: %s", article["article"], e)
+                    article.setdefault("desc", "")
 
         # Tag articles that were featured on Wikipedia's main page
         for article in trending:
@@ -750,7 +754,7 @@ def build_trmnl_payload(trending):
 
     articles = []
     for a in display:
-        desc = a["desc"]
+        desc = a.get("desc") or ""
         if len(desc) > 200:
             desc = desc[:197] + "..."
         name = a["article"].replace("_", " ")
@@ -807,10 +811,11 @@ def main():
                 if GEMINI_API_KEY:
                     asyncio.run(enrich_with_reasons(trending))
                 for i, a in enumerate(trending[:10], 1):
+                    desc = a.get("desc") or "(not enriched)"
                     log.info(
                         "  #%d: %s (%.1fx, %s views) — %s",
                         i, a["article"], a["mult"], format_views(a["views"]),
-                        a["desc"][:80],
+                        desc[:80],
                     )
 
             state = {"last_fetch": datetime.now().isoformat(), "articles": trending}
