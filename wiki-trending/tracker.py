@@ -24,7 +24,7 @@ log = logging.getLogger("wiki-trending")
 PAGES_TO_CHECK = 500
 TRENDING_THRESHOLD = 3.0
 DISPLAY_COUNT = 5
-POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "14400"))  # 4 hours
+POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "21600"))  # 6 hours
 TRMNL_WEBHOOK_UUID = os.getenv("TRMNL_WEBHOOK_UUID", "")
 TRMNL_API_URL = "https://trmnl.com/api/custom_plugins"
 DATA_FILE = os.getenv("DATA_FILE", "/data/wiki_state.json")
@@ -615,15 +615,128 @@ async def fetch_trending():
         return trending
 
 
+GEMINI_SYSTEM_RULES = """You are writing one-line descriptions for an e-ink display that shows Wikipedia articles with unusual traffic spikes.
+
+Your job: write ONE sentence that briefly says WHAT this is, then WHY it's spiking right now. The reader may have never heard of this topic.
+
+Use the data provided AND your web search to investigate. You will be given:
+- Daily and hourly traffic patterns (look for sudden spikes vs gradual rises)
+- Desktop vs mobile split (heavy mobile = social media; heavy desktop = news/search)
+- Reddit posts mentioning this topic (Reddit is a top Wikipedia traffic driver)
+- Whether other language Wikipedias are also spiking (global event vs English-only)
+- Wikidata dates (check if today is a notable anniversary)
+- Wikipedia main page features, news headlines, and recent edit activity
+
+Use these clues together to determine the cause. For example:
+- Spike at a single hour + heavy mobile = likely a viral tweet or TikTok
+- Spiking across multiple languages = global news event
+- Anniversary date from Wikidata matching today = anniversary-driven traffic
+- High-upvote Reddit post = Reddit-driven traffic
+- Gradual rise + heavy desktop = news article or Wikipedia feature
+
+CRITICAL rules for your response:
+- Required format: "<what it is> — <why it's spiking>". The em dash (—) is MANDATORY and must separate the two parts.
+- NEVER start with meta-phrases like "The article is about", "This article", "This page describes", "The page is about", "This is an article about". Start with the subject directly.
+- Your sentence MUST be about the given article specifically — do not describe a loosely related news story that merely mentions a similar topic.
+- Respond with ONLY one sentence. Nothing else.
+- Be specific: include names, dates, scores, outcomes when relevant.
+- Keep it under 150 characters if possible. Hard cap 200.
+- If the cause is genuinely unclear, infer the most likely driver from the data (e.g. "featured on Wikipedia main page", "Reddit-driven interest", "anniversary of a notable event", "gradual organic search interest"). NEVER bail out by paraphrasing the Wikipedia intro. NEVER say the cause is unclear or unknown.
+
+EXAMPLES — format is "what it is — why it's spiking". Use an em dash to separate.
+
+  Article: Ruby Rose
+  GOOD: 'Australian actress — accused Katy Perry of sexual assault at a Melbourne nightclub.'
+  BAD: 'An Australian model and actress who has been in the news recently.'
+
+  Article: Carrizozo volcanic field
+  GOOD: 'Lava field in New Mexico — featured in a NASA Science article about its 40-mile flow.'
+  BAD: 'A volcanic field in central New Mexico covering 330 square miles.'
+
+  Article: Dacre railway station
+  GOOD: "Closed station in Cumbria, England — featured on Wikipedia's main page as a Did You Know entry."
+  BAD: 'The Dacre railway station article is experiencing a traffic spike because...'
+
+  Article: Warren Zevon
+  GOOD: 'Werewolves of London singer — would have turned 79 today.'
+  BAD: 'An American rock singer and songwriter known for Werewolves of London.'
+
+  Article: 330 West 42nd Street
+  GOOD: "Manhattan Art Deco skyscraper, the McGraw-Hill Building — featured on Wikipedia's main page Did You Know section."
+  BAD: 'The article is about 330 West 42nd Street, also known as the McGraw-Hill Building, a 485-foot-tall skyscraper...'"""
+
+
+_BANNED_PREFIXES = (
+    "the article is about",
+    "the article describes",
+    "this article ",
+    "this page ",
+    "the page is about",
+    "the page describes",
+    "this is an article about",
+)
+
+
+def _validate_reason(text):
+    """Return error string if the reason fails our format rules, else ''."""
+    if not text:
+        return "empty response"
+    stripped = text.lstrip("'\"").lower()
+    for prefix in _BANNED_PREFIXES:
+        if stripped.startswith(prefix):
+            return "starts with meta-phrase '{}'".format(prefix.strip())
+    if "—" not in text:
+        return "missing em dash"
+    if len(text) > 250:
+        return "too long ({} chars)".format(len(text))
+    return ""
+
+
+async def _call_gemini(session, user_text):
+    """Single Gemini call with system instruction + grounding. Returns text or ''."""
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        "models/gemini-2.5-flash:generateContent?key={}"
+    ).format(GEMINI_API_KEY)
+    payload = {
+        "system_instruction": {"parts": [{"text": GEMINI_SYSTEM_RULES}]},
+        "contents": [{"parts": [{"text": user_text}]}],
+        "tools": [{"google_search": {}}],
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": 4096,
+            "thinkingConfig": {
+                "thinkingBudget": 2048,
+            },
+        },
+    }
+    try:
+        async with session.post(url, json=payload) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    for part in parts:
+                        if "text" in part:
+                            text = part["text"].strip()
+                            text = re.sub(r'\s*\[cite:[^\]]*\]?', '', text)
+                            text = re.sub(r'\s*\[\d+(?:,\s*\d+)*\]?', '', text)
+                            return text.strip()
+                log.warning("Gemini 200 but no text: %s", json.dumps(data)[:300])
+            else:
+                body = await resp.text()
+                log.warning("Gemini returned %d: %s", resp.status, body[:200])
+    except Exception as e:
+        log.warning("Gemini fetch failed: %s", e)
+    return ""
+
+
 async def get_trending_reason(session, article_name, mult, wiki_desc="",
                               news_headline="", wiki_feature="", recent_edits="",
                               access_breakdown="", daily_shape="", hourly_pattern="",
                               reddit_mentions="", multilang_spike="", wikidata_info=""):
     """Ask Gemini with Google Search grounding why an article is trending."""
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-2.5-flash:generateContent?key={}"
-    ).format(GEMINI_API_KEY)
     name = article_name.replace("_", " ")
     context_parts = []
     if wiki_feature:
@@ -647,81 +760,33 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
     if wikidata_info:
         context_parts.append(wikidata_info)
     context = "\n".join(context_parts)
-    prompt = (
-        "You are writing one-line descriptions for an e-ink display that shows "
-        "Wikipedia articles with unusual traffic spikes.\n\n"
+    user_text = (
         "Article: {name}\n"
         "Traffic spike: {mult}x normal\n"
-        "{context}\n\n"
-        "Your job: write ONE sentence that briefly says WHAT this is, then WHY it\\'s "
-        "spiking right now. The reader may have never heard of this topic.\n\n"
-        "Use the data provided AND your web search to investigate. You have been given:\n"
-        "- Daily and hourly traffic patterns (look for sudden spikes vs gradual rises)\n"
-        "- Desktop vs mobile split (heavy mobile = social media; heavy desktop = news/search)\n"
-        "- Reddit posts mentioning this topic (Reddit is a top Wikipedia traffic driver)\n"
-        "- Whether other language Wikipedias are also spiking (global event vs English-only)\n"
-        "- Wikidata dates (check if today is a notable anniversary)\n"
-        "- Wikipedia main page features, news headlines, and recent edit activity\n\n"
-        "Use these clues together to determine the cause. For example:\n"
-        "- Spike at a single hour + heavy mobile = likely a viral tweet or TikTok\n"
-        "- Spiking across multiple languages = global news event\n"
-        "- Anniversary date from Wikidata matching today = anniversary-driven traffic\n"
-        "- High-upvote Reddit post = Reddit-driven traffic\n"
-        "- Gradual rise + heavy desktop = news article or Wikipedia feature\n\n"
-        "CRITICAL rules for your response:\n"
-        "- Your sentence MUST be about '{name}' specifically — do not describe "
-        "a loosely related news story that merely mentions a similar topic.\n"
-        "- Respond with ONLY one sentence. Nothing else.\n"
-        "- Be specific: include names, dates, scores, outcomes when relevant.\n"
-        "- Keep it under 150 characters if possible.\n"
-        "- If you truly cannot find the reason, write a concise description of what "
-        "the topic IS based on the Wikipedia intro provided. Do not mention that the "
-        "cause is unclear or unknown.\n\n"
-        "EXAMPLES — format is 'what it is — why it\\'s spiking'. Use an em dash to separate.\n\n"
-        "  Article: Ruby Rose\n"
-        "  GOOD: 'Australian actress — accused Katy Perry of sexual assault at a Melbourne nightclub.'\n"
-        "  BAD: 'An Australian model and actress who has been in the news recently.'\n\n"
-        "  Article: Carrizozo volcanic field\n"
-        "  GOOD: 'Lava field in New Mexico — featured in a NASA Science article about its 40-mile flow.'\n"
-        "  BAD: 'A volcanic field in central New Mexico covering 330 square miles.'\n\n"
-        "  Article: Dacre railway station\n"
-        "  GOOD: 'Closed station in Cumbria, England — featured on Wikipedia\\'s main page as a Did You Know entry.'\n"
-        "  BAD: 'The Dacre railway station article is experiencing a traffic spike because...'\n\n"
-        "  Article: Warren Zevon\n"
-        "  GOOD: 'Werewolves of London singer — would have turned 79 today.'\n"
-        "  BAD: 'An American rock singer and songwriter known for Werewolves of London.'"
+        "{context}"
     ).format(name=name, mult=mult, context=context)
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "tools": [{"google_search": {}}],
-        "generationConfig": {
-            "maxOutputTokens": 4096,
-            "thinkingConfig": {
-                "thinkingBudget": 2048,
-            },
-        },
-    }
-    try:
-        async with session.post(url, json=payload) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    for part in parts:
-                        if "text" in part:
-                            text = part["text"].strip()
-                            # Remove Gemini citations like [cite: 1, 2] or [1] or unclosed [cite: 1, 2
-                            text = re.sub(r'\s*\[cite:[^\]]*\]?', '', text)
-                            text = re.sub(r'\s*\[\d+(?:,\s*\d+)*\]?', '', text)
-                            return text.strip()
-                log.warning("Gemini 200 but no text for %s: %s", article_name, json.dumps(data)[:300])
-            else:
-                body = await resp.text()
-                log.warning("Gemini returned %d for %s: %s", resp.status, article_name, body[:200])
-    except Exception as e:
-        log.warning("Gemini fetch failed for %s: %s", article_name, e)
-    return ""
+
+    text = await _call_gemini(session, user_text)
+    err = _validate_reason(text)
+    if err:
+        log.info("Gemini retry for %s (%s): %r", article_name, err, text[:120])
+        retry_text = (
+            "{user_text}\n\n"
+            "IMPORTANT: Your previous response was rejected because it {err}. "
+            "Rewrite as ONE sentence in the format "
+            "'<what it is> — <why it\\'s spiking>'. "
+            "The em dash is required. Do NOT start with 'The article is about' "
+            "or any other meta-phrase."
+        ).format(user_text=user_text, err=err)
+        retry = await _call_gemini(session, retry_text)
+        retry_err = _validate_reason(retry)
+        if retry_err:
+            log.warning("Gemini retry still invalid for %s (%s): %r",
+                        article_name, retry_err, retry[:120])
+            # Return the better of the two if we have anything; else empty.
+            return retry or text
+        return retry
+    return text
 
 
 async def enrich_with_reasons(trending):

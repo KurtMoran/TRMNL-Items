@@ -19,7 +19,7 @@ E-ink display showing Wikipedia articles that are trending well above their norm
 | Google Gemini 2.5 Flash | API key | Free tier | 5 requests/cycle, 5s apart |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
-Runs every 4 hours (6 cycles/day).
+Runs every 6 hours (4 cycles/day).
 
 ## Setup
 
@@ -60,7 +60,7 @@ docker run -d \
 | `TRMNL_WEBHOOK_UUID` | Yes | From your TRMNL private plugin |
 | `GEMINI_API_KEY` | No | Enables AI-generated "why trending" descriptions |
 | `TZ` | No | Timezone for display timestamps (default: UTC) |
-| `POLL_INTERVAL_SEC` | No | Seconds between cycles (default: 14400 = 4 hours) |
+| `POLL_INTERVAL_SEC` | No | Seconds between cycles (default: 21600 = 6 hours) |
 | `DATA_FILE` | No | State file path (default: /data/wiki_state.json) |
 
 ## Files
