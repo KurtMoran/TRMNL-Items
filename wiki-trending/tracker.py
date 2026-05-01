@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("wiki-trending")
 
 # Configuration
-PAGES_TO_CHECK = 200
+PAGES_TO_CHECK = 500
 TRENDING_THRESHOLD = 3.0
 DISPLAY_COUNT = 5
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "14400"))  # 4 hours
@@ -29,7 +29,13 @@ TRMNL_WEBHOOK_UUID = os.getenv("TRMNL_WEBHOOK_UUID", "")
 TRMNL_API_URL = "https://trmnl.com/api/custom_plugins"
 DATA_FILE = os.getenv("DATA_FILE", "/data/wiki_state.json")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-USER_AGENT = "TRMNL Wikipedia Trending Display (github.com/KurtMoran/TRMNL-Items)"
+# Wikimedia Analytics API requires identifying User-Agent in this format:
+# https://wikimedia.org/api/rest_v1/ (Access policy → Client identification)
+USER_AGENT = (
+    "TRMNL-Wiki-Trending/1.0 "
+    "(https://github.com/KurtMoran/TRMNL-Items) "
+    "python-aiohttp"
+)
 
 # Pages to skip (utility/meta/adult pages)
 SKIP_PREFIXES = (
@@ -105,8 +111,13 @@ async def get_article_views(session, article, days_back=7):
             if resp.status == 200:
                 data = await resp.json()
                 return data.get("items", [])
+            # Per Wikimedia docs, 404 means "zero views or data not loaded";
+            # not an error worth alerting on.
+            if resp.status == 404:
+                return []
+            log.warning("Views fetch returned HTTP %d for %s", resp.status, article)
     except Exception as e:
-        log.debug("Views fetch failed for %s: %s", article, e)
+        log.warning("Views fetch exception for %s: %s", article, e)
     return []
 
 
@@ -448,28 +459,35 @@ async def get_recent_edits(session, article):
 
 
 async def check_trending(session, article_name, current_views):
-    """Lightweight check: fetch only historical views to test the threshold."""
+    """Lightweight check: fetch only historical views to test the threshold.
+
+    Always returns a dict with a 'status' field for diagnostics:
+    'trending', 'below_threshold', 'no_history', or 'zero_avg'.
+    """
+    result = {
+        "article": article_name,
+        "views": current_views,
+        "avg": 0,
+        "mult": 0,
+        "status": "no_history",
+    }
     historical = await get_article_views(session, article_name)
     if not historical or len(historical) <= 1:
-        return None
+        return result
 
     daily = [day["views"] for day in historical]
     avg = sum(daily[:-1]) / (len(daily) - 1)
     if avg == 0:
-        return None
+        result["status"] = "zero_avg"
+        return result
 
     multiplier = current_views / avg
-    if multiplier < TRENDING_THRESHOLD:
-        return None
-
-    daily_shape = ", ".join(format_views(v) for v in daily)
-    return {
-        "article": article_name,
-        "views": current_views,
-        "avg": int(avg),
-        "mult": round(multiplier, 1),
-        "daily_shape": daily_shape,
-    }
+    result["avg"] = int(avg)
+    result["mult"] = round(multiplier, 1)
+    result["daily_shape"] = ", ".join(format_views(v) for v in daily)
+    result["history_days"] = len(daily)
+    result["status"] = "trending" if multiplier >= TRENDING_THRESHOLD else "below_threshold"
+    return result
 
 
 async def enrich_article(session, article):
@@ -523,29 +541,65 @@ async def fetch_trending():
         featured = await get_wiki_featured(session)
         log.info("Featured article: %s", featured.get("tfa", "none"))
 
-        log.info("Checking %d candidates for trending", len(candidates))
+        log.info(
+            "Checking %d candidates for trending (threshold %.1fx)",
+            len(candidates), TRENDING_THRESHOLD,
+        )
 
         trending = []
-        batch_size = 10
-        for i in range(0, len(candidates), batch_size):
-            batch = candidates[i:i + batch_size]
-            tasks = [check_trending(session, p["article"], p["views"]) for p in batch]
-            results = await asyncio.gather(*tasks)
-            for r in results:
-                if r:
-                    trending.append(r)
+        all_results = []
+        stats = {"trending": 0, "below_threshold": 0, "no_history": 0, "zero_avg": 0}
+        # Wikimedia Analytics API guidance: "wait for each request to finish
+        # before sending another request." So no parallel batching here.
+        log_every = 25
+        for i, p in enumerate(candidates, 1):
+            r = await check_trending(session, p["article"], p["views"])
+            all_results.append(r)
+            stats[r["status"]] += 1
+            if r["status"] == "trending":
+                trending.append(r)
+            if i % log_every == 0 or i == len(candidates):
+                log.info(
+                    "Progress: %d/%d — trending=%d below=%d no_data=%d zero_avg=%d",
+                    i, len(candidates),
+                    stats["trending"], stats["below_threshold"],
+                    stats["no_history"], stats["zero_avg"],
+                )
+
+        log.info(
+            "Candidate breakdown: %d trending, %d below threshold, "
+            "%d missing history, %d zero-avg (out of %d)",
+            stats["trending"], stats["below_threshold"],
+            stats["no_history"], stats["zero_avg"], len(candidates),
+        )
+
+        # Dump the strongest near-misses so we can see what *almost* trended.
+        near_misses = sorted(
+            (r for r in all_results if r["status"] == "below_threshold"),
+            key=lambda x: -x["mult"],
+        )[:10]
+        if near_misses:
             log.info(
-                "Progress: %d/%d checked, %d trending so far",
-                min(i + batch_size, len(candidates)), len(candidates), len(trending),
+                "Top below-threshold candidates (under %.1fx):",
+                TRENDING_THRESHOLD,
             )
+            for r in near_misses:
+                log.info(
+                    "  %s: %.2fx (%s views vs avg %s, %d days history)",
+                    r["article"], r["mult"],
+                    format_views(r["views"]), format_views(r["avg"]),
+                    r.get("history_days", 0),
+                )
 
         trending.sort(key=lambda x: -x["mult"])
 
-        # Enrich only the articles we'll actually display
+        # Enrich only the articles we'll actually display.
+        # Process one at a time so we don't burst Wikimedia endpoints.
         to_enrich = trending[:DISPLAY_COUNT]
         if to_enrich:
             log.info("Enriching top %d trending articles", len(to_enrich))
-            await asyncio.gather(*[enrich_article(session, a) for a in to_enrich])
+            for article in to_enrich:
+                await enrich_article(session, article)
 
         # Tag articles that were featured on Wikipedia's main page
         for article in trending:
