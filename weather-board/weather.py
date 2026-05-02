@@ -28,6 +28,14 @@ TIDE_STATION_ID = os.getenv("TIDE_STATION_ID", "9410230")  # NOAA La Jolla (Scri
 NDBC_STATION = os.getenv("NDBC_STATION", "LJAC1")  # NDBC Scripps Pier sensor (water temp)
 NDBC_URL = "https://www.ndbc.noaa.gov/data/realtime2/{}.txt".format(NDBC_STATION)
 
+# Launch Library 2 (free) — independent cache so changing POLL_INTERVAL_SEC doesn't burn the API budget.
+# Free unauthenticated tier: ~15 req/hour. Default 6h refresh = 4 calls/day, well under.
+LAUNCH_CACHE_FILE = os.getenv("LAUNCH_CACHE_FILE", "/data/launches_cache.json")
+LAUNCH_REFRESH_SEC = int(os.getenv("LAUNCH_REFRESH_SEC", "21600"))
+LL2_LOCATION_IDS = os.getenv("LL2_LOCATION_IDS", "11")  # 11 = Vandenberg SFB
+LL2_API_KEY = os.getenv("LL2_API_KEY", "")  # optional; lifts rate limit when set
+LAUNCH_LOCATION_LABEL = os.getenv("LAUNCH_LOCATION_LABEL", "Vandenberg")
+
 FORECAST_URL = (
     "https://api.open-meteo.com/v1/forecast"
     "?latitude={lat}&longitude={lon}"
@@ -347,6 +355,187 @@ def _sunset_marker_y(curve_y):
 SUNRISE_MARKER_Y = 4  # always at the top of the chart
 
 
+def _load_launch_cache():
+    try:
+        with open(LAUNCH_CACHE_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_launch_cache(cache):
+    try:
+        os.makedirs(os.path.dirname(LAUNCH_CACHE_FILE), exist_ok=True)
+        with open(LAUNCH_CACHE_FILE, "w") as f:
+            json.dump(cache, f)
+    except Exception as e:
+        log.warning("Could not save launch cache: %s", e)
+
+
+def fetch_launches_smart(now):
+    """Returns today's Vandenberg launches in local (Pacific) time.
+
+    Cache file persists across container restarts. Refresh is gated by
+    LAUNCH_REFRESH_SEC AND a date-key match — so changing POLL_INTERVAL_SEC
+    later does NOT change how often we hit Launch Library 2. Default 6h
+    refresh = 4 API calls/day, well under the 15 req/hour free tier.
+    """
+    today_key = now.date().isoformat()
+    cache = _load_launch_cache()
+    fetched_at = None
+    if cache.get("fetched_at"):
+        try:
+            fetched_at = datetime.fromisoformat(cache["fetched_at"])
+        except ValueError:
+            fetched_at = None
+
+    cache_fresh = (
+        cache.get("date_key") == today_key
+        and fetched_at is not None
+        and (now - fetched_at).total_seconds() < LAUNCH_REFRESH_SEC
+    )
+    if cache_fresh:
+        age = int((now - fetched_at).total_seconds())
+        log.info("Launches: using cache (%ds old, %d entries)",
+                 age, len(cache.get("launches", [])))
+        return cache.get("launches", [])
+
+    # Pad the UTC window by ±1 day so launches near local midnight aren't missed
+    # by the timezone shift.
+    win_start = (now.date() - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+    win_end = (now.date() + timedelta(days=2)).strftime("%Y-%m-%dT00:00:00Z")
+    url = (
+        "https://ll.thespacedevs.com/2.3.0/launches/"
+        "?location__ids={loc}&net__gte={start}&net__lt={end}&limit=20&mode=normal"
+    ).format(loc=LL2_LOCATION_IDS, start=win_start, end=win_end)
+    headers = {"User-Agent": "trmnl-weather-board/1.0"}
+    if LL2_API_KEY:
+        headers["Authorization"] = "Token {}".format(LL2_API_KEY)
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code == 429:
+            log.warning("Launch Library 2 rate-limited; keeping stale cache")
+            return cache.get("launches", []) if cache.get("date_key") == today_key else []
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        log.error("Launch Library 2 fetch failed: %s", e)
+        return cache.get("launches", []) if cache.get("date_key") == today_key else []
+
+    utc_offset_hours = (datetime.now() - datetime.utcnow()).total_seconds() / 3600
+    launches = []
+    for r in data.get("results", []):
+        net_iso = r.get("net")
+        if not net_iso:
+            continue
+        try:
+            net_utc = datetime.fromisoformat(net_iso.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        net_local = (net_utc + timedelta(hours=utc_offset_hours)).replace(tzinfo=None)
+        if net_local.date() != now.date():
+            continue
+        rocket_obj = r.get("rocket") or {}
+        config = rocket_obj.get("configuration") or {}
+        mission_obj = r.get("mission") or {}
+        pad_obj = r.get("pad") or {}
+        status_obj = r.get("status") or {}
+        launches.append({
+            "name": r.get("name", ""),
+            "net_local": net_local.isoformat(),
+            "rocket": config.get("name", ""),
+            "mission": mission_obj.get("name", "") or "",
+            "pad": pad_obj.get("name", "") or "",
+            "status": status_obj.get("abbrev", "") or "",
+        })
+
+    _save_launch_cache({
+        "date_key": today_key,
+        "fetched_at": now.isoformat(),
+        "launches": launches,
+    })
+    log.info("Launches: fetched %d for %s from Vandenberg (next refresh in %dh)",
+             len(launches), today_key, LAUNCH_REFRESH_SEC // 3600)
+    return launches
+
+
+def pick_todays_launch(launches, now):
+    """Returns (net_local_dt, launch_dict) for the next launch today, or — if all
+    of today's launches have already happened — the most recent one. None if no
+    launches today."""
+    items = []
+    for L in launches:
+        try:
+            dt = datetime.fromisoformat(L["net_local"])
+        except (KeyError, ValueError):
+            continue
+        items.append((dt, L))
+    if not items:
+        return None
+    items.sort(key=lambda x: x[0])
+    for dt, L in items:
+        if dt >= now:
+            return dt, L
+    return items[-1]
+
+
+def shorten_pad(pad_name):
+    """'Space Launch Complex 4E' -> 'SLC-4E'. Other formats pass through."""
+    if not pad_name:
+        return ""
+    p = pad_name.strip()
+    low = p.lower()
+    if low.startswith("space launch complex"):
+        rest = p[len("Space Launch Complex"):].strip()
+        return "SLC-{}".format(rest) if rest else "SLC"
+    return p
+
+
+def build_launch_fields(now, launches):
+    """Returns merge-var dict for a launch happening today, or zeros/blanks if none."""
+    fields = {
+        "has_launch": False,
+        "launch_x": None,
+        "launch_time_str": "",
+        "launch_what": "",
+        "launch_where": "",
+    }
+    pick = pick_todays_launch(launches, now)
+    if not pick:
+        return fields
+    net_dt, L = pick
+    rocket = L.get("rocket", "")
+    mission = (L.get("mission") or "").strip()
+    pad_short = shorten_pad(L.get("pad", ""))
+    name = L.get("name", "")
+
+    # "Falcon 9 / Starlink 9-3" if both present, else fall back to launch name
+    if rocket and mission:
+        what = "{} / {}".format(rocket, mission)
+    elif rocket:
+        what = rocket
+    else:
+        what = name or "Launch"
+
+    where = LAUNCH_LOCATION_LABEL
+    if pad_short:
+        where = "{} {}".format(LAUNCH_LOCATION_LABEL, pad_short)
+
+    hour_frac = net_dt.hour + net_dt.minute / 60
+    raw_x = hour_frac / 24 * WATER_CURVE_W
+    # Clamp so the ~8px-wide rocket glyph and its fins never clip the chart edge.
+    clamped_x = min(max(raw_x, 5), WATER_CURVE_W - 5)
+    fields.update({
+        "has_launch": True,
+        "launch_x": round(clamped_x, 1),
+        "launch_time_str": fmt_time(net_dt.isoformat()),
+        "launch_what": what,
+        "launch_where": where,
+    })
+    return fields
+
+
 def compute_calibration_delta(ndbc_today_hourly, sst_by_hour, today_str,
                                fallback_ndbc, fallback_om):
     """Median of today's hourly (NDBC - OM) pairs, in °F.
@@ -374,7 +563,8 @@ def compute_calibration_delta(ndbc_today_hourly, sst_by_hour, today_str,
     return 0, len(diffs)
 
 
-def build_today_curve(now, ndbc_hourly, om_hourly, delta, sunrise_x=None, sunset_x=None):
+def build_today_curve(now, ndbc_hourly, om_hourly, delta, sunrise_x=None, sunset_x=None,
+                       launch_x=None):
     """Calibrated OM forecast across the full 24-hour day. NDBC samples are
     still used upstream to compute `delta`, but the curve itself stays smooth
     by avoiding the spikey raw sensor values. Returns dict of payload fields,
@@ -398,6 +588,7 @@ def build_today_curve(now, ndbc_hourly, om_hourly, delta, sunrise_x=None, sunset
 
     sunrise_y_curve = y_at_x(sunrise_x)
     sunset_y_curve = y_at_x(sunset_x)
+    launch_y_curve = y_at_x(launch_x)
 
     return {
         "today_curve_points": points,
@@ -407,6 +598,7 @@ def build_today_curve(now, ndbc_hourly, om_hourly, delta, sunrise_x=None, sunset
         "sunset_y_curve": sunset_y_curve,
         "sunrise_sun_y": SUNRISE_MARKER_Y,
         "sunset_sun_y": _sunset_marker_y(sunset_y_curve),
+        "launch_y_curve": launch_y_curve,
     }
 
 
@@ -441,7 +633,12 @@ def build_payload():
         "sunrise_x": None, "sunset_x": None,
         "sunrise_y_curve": None, "sunset_y_curve": None,
         "sunrise_sun_y": 4, "sunset_sun_y": 44,
+        "has_launch": False, "launch_x": None, "launch_y_curve": None,
+        "launch_time_str": "", "launch_what": "", "launch_where": "",
     }
+
+    launches_today = fetch_launches_smart(now)
+    p.update(build_launch_fields(now, launches_today))
 
     if forecast:
         daily = forecast.get("daily", {})
@@ -622,6 +819,7 @@ def build_payload():
     today_curve = build_today_curve(
         now, ndbc_today_hourly, sst_by_hour, delta,
         sunrise_x=p.get("sunrise_x"), sunset_x=p.get("sunset_x"),
+        launch_x=p.get("launch_x"),
     )
     if today_curve:
         p.update(today_curve)
@@ -735,6 +933,10 @@ def main():
         log.info("Today: %s°/%s° %s | Ocean %s°F | Swell %s | %s",
                  mv.get("hi"), mv.get("lo"), mv.get("phrase"),
                  mv.get("ocean"), mv.get("swell"), mv.get("energy"))
+        if mv.get("has_launch"):
+            log.info("Launch today: %s %s @ %s",
+                     mv.get("launch_what"), mv.get("launch_where"),
+                     mv.get("launch_time_str"))
         push_to_trmnl(payload)
         save_state(payload)
         time.sleep(POLL_INTERVAL_SEC)

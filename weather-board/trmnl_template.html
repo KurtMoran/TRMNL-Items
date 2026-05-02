@@ -64,6 +64,24 @@
     font-weight: 600;
     line-height: 1.5;
   }
+  .hero-launch {
+    margin-top: 5px;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    line-height: 1.25;
+  }
+  .hero-launch .rocket-icon {
+    flex: 0 0 12px;
+    height: 14px;
+    display: inline-flex;
+  }
+  .hero-launch .rocket-icon svg { width: 12px; height: 14px; }
+  .hero-launch .launch-text { min-width: 0; }
+  .hero-launch .launch-text .when { font-weight: 800; }
+  .hero-launch .launch-text .where { opacity: 0.65; font-weight: 600; }
   .right-col {
     flex: 1;
     display: flex;
@@ -395,6 +413,9 @@
 {% capture wave_5 %}<svg viewBox="0 0 64 32" xmlns="http://www.w3.org/2000/svg"><path d="M 0 30 Q 4 14 10 6 Q 16 0 26 0 Q 36 2 40 8 Q 42 14 38 18 L 32 20 Q 28 20 24 18 Q 28 22 32 24 Q 42 26 56 24 Q 60 24 64 26 L 64 32 L 0 32 Z" fill="black"/><circle cx="22" cy="14" r="1.4" fill="white"/><circle cx="32" cy="6" r="1.4" fill="white"/><circle cx="50" cy="22" r="1.4" fill="white"/></svg>{% endcapture %}
 {% capture wave_0 %}<svg viewBox="0 0 64 32" xmlns="http://www.w3.org/2000/svg"></svg>{% endcapture %}
 
+{% comment %} ===== Rocket icon for launch info ===== {% endcomment %}
+{% capture svg_rocket %}<svg viewBox="-6 -8 12 16" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M0 -7 L2 -3.5 L2 3 L-2 3 L-2 -3.5 Z"/><path d="M-2 0 L-4 4 L-2 4 Z"/><path d="M2 0 L4 4 L2 4 Z"/><path d="M-1.3 4 L0 7 L1.3 4 Z"/></svg>{% endcapture %}
+
 <div class="screen">
   <div class="top">
     <div class="hero">
@@ -421,6 +442,12 @@
             <div>{{ delta }}</div>
             <div>{{ tdelta }}</div>
           </div>
+          {% if has_launch %}
+          <div class="hero-launch">
+            <span class="rocket-icon">{{ svg_rocket }}</span>
+            <span class="launch-text"><span class="when">{{ launch_time_str }}</span> {{ launch_what }} <span class="where">&middot; {{ launch_where }}</span></span>
+          </div>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -516,6 +543,15 @@
             {% if sunset_x %}
               <circle cx="{{ sunset_x }}" cy="{{ sunset_sun_y }}" r="2" fill="#000"/>
               <path d="M {{ sunset_x | minus: 4 }} {{ sunset_sun_y }} h -1.5 M {{ sunset_x | plus: 4 }} {{ sunset_sun_y }} h 1.5 M {{ sunset_x | plus: 3 }} {{ sunset_sun_y | minus: 3 }} l 1.3 -1.3 M {{ sunset_x | minus: 3 }} {{ sunset_sun_y | minus: 3 }} l -1.3 -1.3" stroke="#000" stroke-width="0.9" stroke-linecap="round"/>
+            {% endif %}
+            {% if has_launch %}
+              <line x1="{{ launch_x }}" y1="25" x2="{{ launch_x }}" y2="{{ launch_y_curve | minus: 2 }}" stroke="#000" stroke-width="1" stroke-dasharray="2.5 2.5" opacity="0.5"/>
+              <g transform="translate({{ launch_x }}, 17)">
+                <path d="M0 -7 L2 -3.5 L2 3 L-2 3 L-2 -3.5 Z" fill="#000"/>
+                <path d="M-2 0 L-4 4 L-2 4 Z" fill="#000"/>
+                <path d="M2 0 L4 4 L2 4 Z" fill="#000"/>
+                <path d="M-1.3 4 L0 7 L1.3 4 Z" fill="#000"/>
+              </g>
             {% endif %}
           </svg>
           <div class="axis">

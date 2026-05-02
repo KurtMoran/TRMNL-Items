@@ -19,9 +19,15 @@ Default location: San Diego (land) + La Jolla Shores (ocean). Configurable via e
 | Open-Meteo Forecast | None | Free | 1 request/cycle |
 | Open-Meteo Marine | None | Free | 1 request/cycle |
 | NDBC realtime2 (Scripps Pier WTMP) | None | Free | 1 request/cycle |
+| Launch Library 2 (Vandenberg launches) | None (optional token) | Free | ~4 requests/day |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
 Polls every 15 minutes (matches TRMNL's e-ink refresh cadence).
+
+Launch Library 2 is on a separate clock — it's gated by `LAUNCH_REFRESH_SEC`
+(default 6h) and a date-key check, with results cached to disk. Changing
+`POLL_INTERVAL_SEC` won't affect how often the launch API gets called, so
+the free-tier budget (~15 req/hour) is always respected.
 
 ## Setup
 
@@ -64,6 +70,11 @@ docker run -d \
 | `TZ` | No | America/Los_Angeles | Timezone for timestamps & API |
 | `DATA_FILE` | No | /data/weather_state.json | State file path |
 | `NDBC_STATION` | No | LJAC1 | NDBC station ID for water temp (default: Scripps Pier) |
+| `LAUNCH_REFRESH_SEC` | No | 21600 | Seconds between Launch Library 2 fetches (default 6h = 4/day) |
+| `LL2_LOCATION_IDS` | No | 11 | Comma-separated LL2 location IDs (11 = Vandenberg SFB) |
+| `LL2_API_KEY` | No | — | Optional LL2 token; lifts the free-tier rate limit |
+| `LAUNCH_LOCATION_LABEL` | No | Vandenberg | Short label shown on the e-ink display |
+| `LAUNCH_CACHE_FILE` | No | /data/launches_cache.json | Where the launch cache is persisted |
 
 ## Files
 

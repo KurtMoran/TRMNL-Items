@@ -75,6 +75,24 @@
       font-weight: 600;
       line-height: 1.5;
     }
+    .hero-launch {
+      margin-top: 5px;
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      line-height: 1.25;
+    }
+    .hero-launch .rocket-icon {
+      flex: 0 0 12px;
+      height: 14px;
+      display: inline-flex;
+    }
+    .hero-launch .rocket-icon svg { width: 12px; height: 14px; }
+    .hero-launch .launch-text { min-width: 0; }
+    .hero-launch .launch-text .when { font-weight: 800; }
+    .hero-launch .launch-text .where { opacity: 0.65; font-weight: 600; }
     .right-col {
       flex: 1;
       display: flex;
@@ -409,6 +427,12 @@
               <div>2&deg; warmer than yesterday</div>
               <div>Tomorrow about the same</div>
             </div>
+            <div class="hero-launch">
+              <span class="rocket-icon">
+                <svg viewBox="-6 -8 12 16" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M0 -7 L2 -3.5 L2 3 L-2 3 L-2 -3.5 Z"/><path d="M-2 0 L-4 4 L-2 4 Z"/><path d="M2 0 L4 4 L2 4 Z"/><path d="M-1.3 4 L0 7 L1.3 4 Z"/></svg>
+              </span>
+              <span class="launch-text"><span class="when">8:24p</span> Falcon 9 / Starlink 9-3 <span class="where">&middot; Vandenberg SLC-4E</span></span>
+            </div>
           </div>
         </div>
       </div>
@@ -528,6 +552,13 @@
               <path d="M 93.7 4 h -1.5 M 101.7 4 h 1.5 M 100.7 7 l 1.3 1.3 M 94.7 7 l -1.3 1.3" stroke="#000" stroke-width="0.9" stroke-linecap="round"/>
               <circle cx="322.2" cy="44" r="2" fill="#000"/>
               <path d="M 318.2 44 h -1.5 M 326.2 44 h 1.5 M 325.2 41 l 1.3 -1.3 M 319.2 41 l -1.3 -1.3" stroke="#000" stroke-width="0.9" stroke-linecap="round"/>
+              <line x1="323.8" y1="25" x2="323.8" y2="20.5" stroke="#000" stroke-width="1" stroke-dasharray="2.5 2.5" opacity="0.5"/>
+              <g transform="translate(323.8, 17)">
+                <path d="M0 -7 L2 -3.5 L2 3 L-2 3 L-2 -3.5 Z" fill="#000"/>
+                <path d="M-2 0 L-4 4 L-2 4 Z" fill="#000"/>
+                <path d="M2 0 L4 4 L2 4 Z" fill="#000"/>
+                <path d="M-1.3 4 L0 7 L1.3 4 Z" fill="#000"/>
+              </g>
             </svg>
             <div class="axis">
               <span>12a</span><span>6a</span><span>noon</span><span>6p</span><span>12a</span>
