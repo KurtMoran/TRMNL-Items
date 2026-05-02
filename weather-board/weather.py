@@ -5,7 +5,7 @@ Polls Open-Meteo Forecast + Marine APIs every 15 minutes and pushes
 today's weather, ocean conditions, and 3-day forecast to a TRMNL
 display via webhook.
 """
-import json, logging, os, time
+import json, logging, os, threading, time
 from datetime import datetime, timedelta
 import requests
 
@@ -28,10 +28,12 @@ TIDE_STATION_ID = os.getenv("TIDE_STATION_ID", "9410230")  # NOAA La Jolla (Scri
 NDBC_STATION = os.getenv("NDBC_STATION", "LJAC1")  # NDBC Scripps Pier sensor (water temp)
 NDBC_URL = "https://www.ndbc.noaa.gov/data/realtime2/{}.txt".format(NDBC_STATION)
 
-# Launch Library 2 (free) — independent cache so changing POLL_INTERVAL_SEC doesn't burn the API budget.
-# Free unauthenticated tier: ~15 req/hour. Default 6h refresh = 4 calls/day, well under.
+# Launch Library 2 (free) — refreshed on a background thread so timing is fully
+# decoupled from POLL_INTERVAL_SEC. Free unauthenticated tier: ~15 req/hour.
+# Default 480s = 7.5 calls/hour (~50% of free tier). Cache file persists across
+# container restarts so a restart never burns extra budget.
 LAUNCH_CACHE_FILE = os.getenv("LAUNCH_CACHE_FILE", "/data/launches_cache.json")
-LAUNCH_REFRESH_SEC = int(os.getenv("LAUNCH_REFRESH_SEC", "21600"))
+LAUNCH_REFRESH_SEC = int(os.getenv("LAUNCH_REFRESH_SEC", "480"))
 LL2_LOCATION_IDS = os.getenv("LL2_LOCATION_IDS", "11")  # 11 = Vandenberg SFB
 LL2_API_KEY = os.getenv("LL2_API_KEY", "")  # optional; lifts rate limit when set
 LAUNCH_LOCATION_LABEL = os.getenv("LAUNCH_LOCATION_LABEL", "Vandenberg")
@@ -243,7 +245,7 @@ def fetch_ndbc():
         resp = requests.get(NDBC_URL, timeout=15)
         resp.raise_for_status()
         local_today = datetime.now().date()
-        utc_offset_hours = (datetime.now() - datetime.utcnow()).total_seconds() / 3600
+        utc_offset_hours = datetime.now().astimezone().utcoffset().total_seconds() / 3600
         for line in resp.text.splitlines():
             if line.startswith("#") or not line.strip():
                 continue
@@ -294,29 +296,31 @@ WATER_CURVE_W, WATER_CURVE_H = 380, 50
 
 
 def _iso_to_curve_x(iso_str):
-    """ISO datetime '2026-05-02T05:55' -> x position on the 24h water curve."""
+    """ISO datetime '2026-05-02T05:55' -> x position on the 24h water curve.
+    Returns int — sub-pixel precision is invisible on a 380px-wide e-ink chart."""
     try:
         dt = datetime.fromisoformat(iso_str)
         hour_frac = dt.hour + dt.minute / 60
-        return round(hour_frac / 24 * WATER_CURVE_W, 1)
+        return round(hour_frac / 24 * WATER_CURVE_W)
     except Exception:
         return None
 
 
 def _curve_geometry(series, now, w, h, pad):
-    """Returns (points, now_x, now_y, hi_temp, hi_hour) from {hour: temp}."""
+    """Returns (points, now_x, now_y, hi_temp, hi_hour) from {hour: temp}.
+    All coordinates rounded to ints to keep the TRMNL payload under 2 KB."""
     hours = sorted(series)
     temps = [series[k] for k in hours]
     t_min, t_max = min(temps), max(temps)
     span = max(t_max - t_min, 1)
 
-    def x_of(k): return round(k / 24 * w, 1)
-    def y_of(t): return round(h - pad - (t - t_min) / span * (h - 2 * pad), 1)
+    def x_of(k): return round(k / 24 * w)
+    def y_of(t): return round(h - pad - (t - t_min) / span * (h - 2 * pad))
     points = " ".join("{},{}".format(x_of(k), y_of(series[k])) for k in hours)
 
     cur_hour = now.hour + now.minute / 60
     cur_temp = series.get(now.hour) or series[min(hours, key=lambda k: abs(k - now.hour))]
-    now_x = round(min(max(cur_hour / 24 * w, 0), w), 1)
+    now_x = round(min(max(cur_hour / 24 * w, 0), w))
     now_y = y_of(cur_temp)
     hi_hour = hours[temps.index(t_max)]
     return points, now_x, now_y, t_max, hi_hour
@@ -341,7 +345,7 @@ def _interp_curve_y(series, hour_frac, w, h, pad):
                 frac = (hour_frac - lo) / (hi_h - lo)
                 t = temps[i - 1] + (temps[i] - temps[i - 1]) * frac
                 break
-    return round(h - pad - (t - t_min) / span * (h - 2 * pad), 1)
+    return round(h - pad - (t - t_min) / span * (h - 2 * pad))
 
 
 def _sunset_marker_y(curve_y):
@@ -355,21 +359,37 @@ def _sunset_marker_y(curve_y):
 SUNRISE_MARKER_Y = 4  # always at the top of the chart
 
 
+_launch_lock = threading.Lock()
+
+
 def _load_launch_cache():
-    try:
-        with open(LAUNCH_CACHE_FILE) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    with _launch_lock:
+        try:
+            with open(LAUNCH_CACHE_FILE) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
 
 
 def _save_launch_cache(cache):
-    try:
-        os.makedirs(os.path.dirname(LAUNCH_CACHE_FILE), exist_ok=True)
-        with open(LAUNCH_CACHE_FILE, "w") as f:
-            json.dump(cache, f)
-    except Exception as e:
-        log.warning("Could not save launch cache: %s", e)
+    with _launch_lock:
+        try:
+            os.makedirs(os.path.dirname(LAUNCH_CACHE_FILE), exist_ok=True)
+            with open(LAUNCH_CACHE_FILE, "w") as f:
+                json.dump(cache, f)
+        except Exception as e:
+            log.warning("Could not save launch cache: %s", e)
+
+
+def launch_refresh_loop():
+    """Background thread — keeps the launch cache fresh on its own clock,
+    independent of the TRMNL poll interval. The main loop just reads cache."""
+    while True:
+        time.sleep(LAUNCH_REFRESH_SEC)
+        try:
+            fetch_launches_smart(datetime.now())
+        except Exception as e:
+            log.error("Launch refresh thread failed: %s", e)
 
 
 def fetch_launches_smart(now):
@@ -423,7 +443,7 @@ def fetch_launches_smart(now):
         log.error("Launch Library 2 fetch failed: %s", e)
         return cache.get("launches", []) if cache.get("date_key") == today_key else []
 
-    utc_offset_hours = (datetime.now() - datetime.utcnow()).total_seconds() / 3600
+    utc_offset_hours = datetime.now().astimezone().utcoffset().total_seconds() / 3600
     launches = []
     for r in data.get("results", []):
         net_iso = r.get("net")
@@ -619,10 +639,6 @@ def build_payload():
         "ocean": "--", "swell": "--", "energy": "--", "energy_tier": 0,
         "ocean_forecast": [],
         "aqi": "--", "aqi_label": "",
-        "high_time": "--", "high_height": "",
-        "high_swell": "", "high_energy": "", "high_energy_tier": 0,
-        "low_time": "--", "low_height": "",
-        "low_swell": "", "low_energy": "", "low_energy_tier": 0,
         "tide1_arrow": "", "tide1_time": "--", "tide1_height": "",
         "tide1_swell": "", "tide1_energy": "", "tide1_energy_tier": 0,
         "tide2_arrow": "", "tide2_time": "--", "tide2_height": "",
@@ -843,13 +859,13 @@ def build_payload():
             except (ValueError, KeyError):
                 continue
             kind = pred.get("type", "")
-            # Collect today's tide events for the curve markers
+            # Collect today's tide events for the curve markers (only x and type
+            # are used by the template — drop the human-readable label to save bytes)
             if t_dt.date() == today_date and kind in ("H", "L"):
                 hour_frac = t_dt.hour + t_dt.minute / 60
                 today_tides.append({
-                    "x": round(hour_frac / 24 * WATER_CURVE_W, 1),
+                    "x": round(hour_frac / 24 * WATER_CURVE_W),
                     "type": kind,
-                    "label": _hour_label(t_dt.hour) if t_dt.minute < 30 else _hour_label((t_dt.hour + 1) % 24),
                 })
             # Tide widget shows the next high/low after now
             if t_dt <= now:
@@ -862,16 +878,6 @@ def build_payload():
                 next_high = (t_dt, height)
             elif kind == "L" and next_low is None:
                 next_low = (t_dt, height)
-        if next_high:
-            p["high_time"] = fmt_time(next_high[0].isoformat())
-            p["high_height"] = "{:.1f}ft".format(next_high[1])
-            p["high_swell"], p["high_energy"], p["high_energy_tier"] = \
-                swell_energy_at(next_high[0], swell_by_hour)
-        if next_low:
-            p["low_time"] = fmt_time(next_low[0].isoformat())
-            p["low_height"] = "{:.1f}ft".format(next_low[1])
-            p["low_swell"], p["low_energy"], p["low_energy_tier"] = \
-                swell_energy_at(next_low[0], swell_by_hour)
 
         # Order the next high/low by time so the soonest event renders first.
         events = []
@@ -923,10 +929,14 @@ def save_state(payload):
 def main():
     log.info("Starting Weather Board for %s + %s", LOCATION_NAME, OCEAN_NAME)
     log.info("Polling every %ds", POLL_INTERVAL_SEC)
+    log.info("Launch refresh every %ds (~%.1f calls/hour)",
+             LAUNCH_REFRESH_SEC, 3600 / LAUNCH_REFRESH_SEC)
     if TRMNL_WEBHOOK_UUID:
         log.info("TRMNL webhook configured")
     else:
         log.info("No TRMNL webhook - console only mode")
+    threading.Thread(target=launch_refresh_loop, daemon=True,
+                     name="launch-refresh").start()
     while True:
         payload = build_payload()
         mv = payload["merge_variables"]
