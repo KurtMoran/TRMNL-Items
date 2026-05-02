@@ -205,28 +205,116 @@ def fetch_json(url, name):
         return None
 
 
-def fetch_ndbc_wtmp():
-    """Most recent water temp (°F) from NDBC realtime2 feed, or None."""
+def fetch_ndbc():
+    """Returns (current_wtmp_F_or_None, hourly_today: dict {hour_int: temp_F}).
+    NDBC realtime2 reports UTC; we convert to local time for the today-curve.
+    """
+    hourly_today = {}
+    current = None
     try:
         resp = requests.get(NDBC_URL, timeout=15)
         resp.raise_for_status()
+        local_today = datetime.now().date()
+        utc_offset_hours = (datetime.now() - datetime.utcnow()).total_seconds() / 3600
         for line in resp.text.splitlines():
             if line.startswith("#") or not line.strip():
                 continue
             cols = line.split()
             if len(cols) < 15:
                 continue
-            wtmp = cols[14]
-            if wtmp == "MM":
+            try:
+                yr, mo, dy, hr, mn = (int(c) for c in cols[:5])
+                wtmp = cols[14]
+                if wtmp in ("MM", "999.0"):
+                    continue
+                wtmp_c = float(wtmp)
+                if wtmp_c > 50 or wtmp_c < -5:
+                    continue
+                wtmp_f = round(wtmp_c * 9 / 5 + 32)
+                if current is None:
+                    current = wtmp_f
+                # Convert UTC sample timestamp -> local; keep first sample per local hour for "today"
+                sample_utc = datetime(yr, mo, dy, hr, mn)
+                sample_local = sample_utc + timedelta(hours=utc_offset_hours)
+                if sample_local.date() == local_today and sample_local.hour not in hourly_today:
+                    hourly_today[sample_local.hour] = wtmp_f
+            except (ValueError, IndexError):
                 continue
-            return round(float(wtmp) * 9 / 5 + 32)
     except Exception as e:
         log.error("NDBC %s fetch failed: %s", NDBC_STATION, e)
-    return None
+    return current, hourly_today
+
+
+def fetch_ndbc_wtmp():
+    """Backward-compatible wrapper — returns just the current reading."""
+    return fetch_ndbc()[0]
 
 
 def safe_round(v):
     return round(v) if isinstance(v, (int, float)) else "--"
+
+
+def _hour_label(h):
+    """0..23 -> '12am' / '4pm' etc."""
+    if h == 0: return "12am"
+    if h < 12: return "{}am".format(h)
+    if h == 12: return "12pm"
+    return "{}pm".format(h - 12)
+
+
+# SVG dimensions for the today-water-curve sparkline (matches template).
+CURVE_W = 380
+CURVE_H = 50
+
+
+def build_today_curve(now, ndbc_hourly, om_hourly, delta):
+    """Merge NDBC actuals (past) + calibrated OM (future) into one 24-hour
+    water-temp curve. Returns dict of payload fields, or {} if no data."""
+    today_str = now.strftime("%Y-%m-%d")
+    series = {}  # hour -> temp_F
+    for h in range(24):
+        if h <= now.hour and h in ndbc_hourly:
+            series[h] = ndbc_hourly[h]
+        else:
+            om = om_hourly.get("{}T{:02d}:00".format(today_str, h))
+            if om is not None:
+                series[h] = round(om + delta)
+    if not series:
+        return {}
+
+    hours = sorted(series)
+    temps = [series[h] for h in hours]
+    t_min, t_max = min(temps), max(temps)
+    # Avoid divide-by-zero if perfectly flat
+    span = max(t_max - t_min, 1)
+
+    # Build polyline points (x: hour 0..23 -> 0..CURVE_W, y: t_max -> 4, t_min -> CURVE_H-4)
+    pad = 4
+    def x_of(h): return round(h / 23 * CURVE_W, 1)
+    def y_of(t): return round(CURVE_H - pad - (t - t_min) / span * (CURVE_H - 2 * pad), 1)
+    points = " ".join("{},{}".format(x_of(h), y_of(series[h])) for h in hours)
+
+    # Peak hour and time
+    hi_temp = t_max
+    hi_hour = hours[temps.index(t_max)]
+
+    # Now marker: position on the curve at current hour (interpolated)
+    cur_hour = now.hour + now.minute / 60
+    cur_temp = series.get(now.hour)
+    if cur_temp is None:
+        # find nearest available hour
+        nearest = min(hours, key=lambda h: abs(h - now.hour))
+        cur_temp = series[nearest]
+    now_x = round(min(max(cur_hour / 23 * CURVE_W, 0), CURVE_W), 1)
+    now_y = y_of(cur_temp)
+
+    return {
+        "today_curve_points": points,
+        "today_hi": hi_temp,
+        "today_hi_time": _hour_label(hi_hour),
+        "today_now_x": now_x,
+        "today_now_y": now_y,
+    }
 
 
 def build_payload():
@@ -248,6 +336,8 @@ def build_payload():
         "aqi": "--", "aqi_label": "",
         "high_time": "--", "high_height": "",
         "low_time": "--", "low_height": "",
+        "today_curve_points": "", "today_hi": "--", "today_hi_time": "--",
+        "today_now_x": 0, "today_now_y": 0,
     }
 
     if forecast:
@@ -330,20 +420,26 @@ def build_payload():
                 })
         p["forecast"] = forecast_days
 
-    om_today_sst = None
+    om_now_sst = None  # OM's prediction for the current hour — for calibration
+    sst_by_hour = {}
     if marine:
         m_daily = marine.get("daily", {})
         m_hourly = marine.get("hourly", {})
 
-        # Build per-day max SST from hourly data
+        # Index hourly SST by ISO timestamp so we can look up the current hour;
+        # also build per-day max for the forecast cards.
         sst_by_day = {}
         for ts, t in zip(m_hourly.get("time", []),
                           m_hourly.get("sea_surface_temperature", [])):
             if t is None or "T" not in ts:
                 continue
+            sst_by_hour[ts] = t
             d = ts.split("T")[0]
             if d not in sst_by_day or t > sst_by_day[d]:
                 sst_by_day[d] = t
+
+        now_hour_key = now.strftime("%Y-%m-%dT%H:00")
+        om_now_sst = sst_by_hour.get(now_hour_key)
 
         today_str = now.strftime("%Y-%m-%d")
         om_today_sst = sst_by_day.get(today_str)
@@ -391,16 +487,23 @@ def build_payload():
 
     # Prefer the NDBC sensor reading at Scripps Pier over Open-Meteo's modeled SST.
     # Also calibrate the forecast: Open-Meteo's offshore-modeled SST runs ~2-4°F warm
-    # vs the nearshore buoy in summer/fall (upwelling). Applying today's NDBC-OM gap
-    # to the forecast cuts residual error in half (validated against 4yr of historical data).
-    ndbc_wtmp = fetch_ndbc_wtmp()
+    # vs the nearshore buoy in summer/fall (upwelling). Apply (NDBC_now - OM_same_hour)
+    # to the forecast — apples-to-apples avoids the diurnal bias (mean range ~5°F, up to
+    # 11°F+ in summer). Validated against 4 years of paired data.
+    ndbc_wtmp, ndbc_today_hourly = fetch_ndbc()
+    delta = 0
     if ndbc_wtmp is not None:
         p["ocean"] = ndbc_wtmp
-        if om_today_sst is not None:
-            delta = ndbc_wtmp - om_today_sst
+        if om_now_sst is not None:
+            delta = ndbc_wtmp - om_now_sst
             for day in p["ocean_forecast"]:
                 if isinstance(day.get("ocean"), (int, float)):
                     day["ocean"] = round(day["ocean"] + delta)
+
+    # Today's water-temp curve: NDBC actuals for past hours, calibrated OM for future.
+    today_curve = build_today_curve(now, ndbc_today_hourly, sst_by_hour, delta)
+    if today_curve:
+        p.update(today_curve)
 
     aqi_data = fetch_json(AIR_QUALITY_URL, "AirQuality")
     if aqi_data:
