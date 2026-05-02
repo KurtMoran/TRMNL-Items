@@ -304,9 +304,8 @@ def _curve_geometry(series, now, w, h, pad):
     points = " ".join("{},{}".format(x_of(k), y_of(series[k])) for k in hours)
 
     cur_hour = now.hour + now.minute / 60
-    cur_temp = series.get(now.hour) or series[min(hours, key=lambda k: abs(k - now.hour))]
     now_x = round(min(max(cur_hour / 24 * w, 0), w))
-    now_y = y_of(cur_temp)
+    now_y = _interp_curve_y(series, cur_hour, w, h, pad)
     hi_hour = hours[temps.index(t_max)]
     return points, now_x, now_y, t_max, hi_hour
 
