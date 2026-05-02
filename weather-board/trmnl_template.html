@@ -227,7 +227,7 @@
     justify-content: center;
     line-height: 1;
   }
-  .ocean .item:last-child { flex: 1.6; }
+  .ocean .item:last-child { flex: 2; }
   .ocean .item.today-water {
     flex: 3.2;
     flex-direction: row;
@@ -333,19 +333,25 @@
   .ocean .tide-block .tide-surf {
     display: flex;
     align-items: center;
-    gap: 4px;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    gap: 3px;
     font-size: 11px;
     font-weight: 700;
     letter-spacing: -0.2px;
   }
   .ocean .tide-block .tide-surf .surf-wave {
     display: inline-flex;
-    width: 24px;
+    flex-shrink: 0;
+    width: 22px;
     height: 12px;
   }
   .ocean .tide-block .tide-surf .surf-wave svg {
-    width: 24px;
+    width: 22px;
     height: 12px;
+  }
+  .ocean .tide-block .tide-surf .surf-text {
+    white-space: nowrap;
   }
   .footer {
     border-top: 1px solid #ccc;
