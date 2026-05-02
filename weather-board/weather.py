@@ -431,6 +431,10 @@ def build_payload():
         "high_swell": "", "high_energy": "", "high_energy_tier": 0,
         "low_time": "--", "low_height": "",
         "low_swell": "", "low_energy": "", "low_energy_tier": 0,
+        "tide1_arrow": "", "tide1_time": "--", "tide1_height": "",
+        "tide1_swell": "", "tide1_energy": "", "tide1_energy_tier": 0,
+        "tide2_arrow": "", "tide2_time": "--", "tide2_height": "",
+        "tide2_swell": "", "tide2_energy": "", "tide2_energy_tier": 0,
         "today_curve_points": "", "today_hi": "--", "today_hi_time": "--",
         "today_now_x": 0, "today_now_y": 0,
         "today_tides": [],
@@ -670,6 +674,23 @@ def build_payload():
             p["low_height"] = "{:.1f}ft".format(next_low[1])
             p["low_swell"], p["low_energy"], p["low_energy_tier"] = \
                 swell_energy_at(next_low[0], swell_by_hour)
+
+        # Order the next high/low by time so the soonest event renders first.
+        events = []
+        if next_high:
+            events.append(("↑", next_high[0], next_high[1]))
+        if next_low:
+            events.append(("↓", next_low[0], next_low[1]))
+        events.sort(key=lambda e: e[1])
+        for slot, ev in zip(("tide1", "tide2"), events):
+            arrow, t_dt, height = ev
+            p["{}_arrow".format(slot)] = arrow
+            p["{}_time".format(slot)] = fmt_time(t_dt.isoformat())
+            p["{}_height".format(slot)] = "{:.1f}ft".format(height)
+            sw, en, tier = swell_energy_at(t_dt, swell_by_hour)
+            p["{}_swell".format(slot)] = sw
+            p["{}_energy".format(slot)] = en
+            p["{}_energy_tier".format(slot)] = tier
         p["today_tides"] = today_tides
 
     return {"merge_variables": p}

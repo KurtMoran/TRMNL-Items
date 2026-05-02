@@ -304,9 +304,10 @@
   .ocean .item .val .energy-bar svg { width: 36px; height: 18px; }
   .ocean .item .val .dim { opacity: 0.55; font-weight: 600; font-size: 13px; margin-left: 2px; }
   .ocean .item.tide-item {
-    flex-direction: column;
-    justify-content: center;
-    gap: 6px;
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: center;
+    gap: 14px;
     padding: 0 6px;
   }
   .ocean .tide-block {
@@ -519,13 +520,13 @@
       <div class="item tide-item">
         <div class="tide-block">
           <div class="tide-line">
-            <span class="arrow">&#8593;</span>
-            <span class="time">{{ high_time }}</span>
-            <span class="height">{{ high_height }}</span>
+            <span class="arrow">{{ tide1_arrow }}</span>
+            <span class="time">{{ tide1_time }}</span>
+            <span class="height">{{ tide1_height }}</span>
           </div>
           <div class="tide-surf">
             <span class="surf-wave">
-              {% case high_energy_tier %}
+              {% case tide1_energy_tier %}
                 {% when 1 %}{{ wave_1 }}
                 {% when 2 %}{{ wave_2 }}
                 {% when 3 %}{{ wave_3 }}
@@ -534,18 +535,18 @@
                 {% else %}{{ wave_0 }}
               {% endcase %}
             </span>
-            <span class="surf-text">{{ high_swell }}{% if high_energy %} &middot; {{ high_energy }}{% endif %}</span>
+            <span class="surf-text">{{ tide1_swell }}{% if tide1_energy %} &middot; {{ tide1_energy }}{% endif %}</span>
           </div>
         </div>
         <div class="tide-block">
           <div class="tide-line">
-            <span class="arrow">&#8595;</span>
-            <span class="time">{{ low_time }}</span>
-            <span class="height">{{ low_height }}</span>
+            <span class="arrow">{{ tide2_arrow }}</span>
+            <span class="time">{{ tide2_time }}</span>
+            <span class="height">{{ tide2_height }}</span>
           </div>
           <div class="tide-surf">
             <span class="surf-wave">
-              {% case low_energy_tier %}
+              {% case tide2_energy_tier %}
                 {% when 1 %}{{ wave_1 }}
                 {% when 2 %}{{ wave_2 }}
                 {% when 3 %}{{ wave_3 }}
@@ -554,7 +555,7 @@
                 {% else %}{{ wave_0 }}
               {% endcase %}
             </span>
-            <span class="surf-text">{{ low_swell }}{% if low_energy %} &middot; {{ low_energy }}{% endif %}</span>
+            <span class="surf-text">{{ tide2_swell }}{% if tide2_energy %} &middot; {{ tide2_energy }}{% endif %}</span>
           </div>
         </div>
       </div>
