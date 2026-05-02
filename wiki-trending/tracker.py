@@ -83,6 +83,57 @@ def format_mult(m):
     }
 
 
+# ============= Per-cycle structured logging =============
+
+_cycle_stats = {"ok": 0, "fail": 0, "started_at": None}
+
+
+def _cycle_start():
+    _cycle_stats["ok"] = 0
+    _cycle_stats["fail"] = 0
+    _cycle_stats["started_at"] = time.monotonic()
+    log.info("─── %s • cycle start ───",
+             datetime.now().strftime("%-I:%M:%S %p"))
+
+
+def _cycle_end():
+    started = _cycle_stats["started_at"] or time.monotonic()
+    elapsed = time.monotonic() - started
+    n = _cycle_stats["ok"] + _cycle_stats["fail"]
+    status = "ok" if _cycle_stats["fail"] == 0 else "WITH FAILURES"
+    log.info("─── cycle %s • %d/%d ops • %.1fs ───",
+             status, _cycle_stats["ok"], n, elapsed)
+
+
+def _step_req(label, detail=""):
+    log.info("→ %s%s", label, " — " + detail if detail else "")
+
+
+def _step_ok(msg):
+    _cycle_stats["ok"] += 1
+    log.info("  ✓ %s", msg)
+
+
+def _step_fail(msg):
+    _cycle_stats["fail"] += 1
+    log.info("  ✗ %s", msg)
+
+
+def _step_info(msg):
+    """Indented progress line under a step — doesn't affect pass/fail tally."""
+    log.info("    … %s", msg)
+
+
+def _short_url(url):
+    """Strip scheme + query string for compact log display."""
+    try:
+        from urllib.parse import urlparse
+        u = urlparse(url)
+        return "{}{}".format(u.netloc, u.path)
+    except Exception:
+        return url
+
+
 def load_state():
     if os.path.exists(DATA_FILE):
         try:
@@ -94,9 +145,14 @@ def load_state():
 
 
 def save_state(state):
-    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    with open(DATA_FILE, "w") as f:
-        json.dump(state, f)
+    _step_req("Save state", DATA_FILE)
+    try:
+        os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+        with open(DATA_FILE, "w") as f:
+            json.dump(state, f)
+        _step_ok("written ({} articles)".format(len(state.get("articles", []))))
+    except Exception as e:
+        _step_fail("write failed: {}".format(e))
 
 
 async def get_article_views(session, article, days_back=7):
@@ -517,40 +573,57 @@ async def enrich_article(session, article):
 
 async def fetch_trending():
     async with aiohttp.ClientSession() as session:
+        # ===== Wikipedia Top Pages =====
+        top_endpoint = "wikimedia.org/api/rest_v1/metrics/pageviews/top/en.wikipedia/all-access"
+        _step_req("Wikipedia Top Pages",
+                  "GET {}/<date> — most-viewed pages, walks back up to 7d for available data".format(top_endpoint))
         data = None
+        date_used = None
+        attempts = []
         for days_back in range(1, 8):
             date = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y/%m/%d")
-            url = (
-                "https://wikimedia.org/api/rest_v1/metrics/pageviews/top/"
-                "en.wikipedia/all-access/{}"
-            ).format(date)
-            log.info("Fetching top pages for %s", date)
+            url = "https://{}/{}".format(top_endpoint, date)
             async with session.get(url, headers={"User-Agent": USER_AGENT}) as resp:
                 if resp.status == 200:
                     data = await resp.json()
+                    date_used = date
                     break
-                log.warning("Top pages for %s not available (%d), trying earlier day", date, resp.status)
+                attempts.append("{} → {}".format(date, resp.status))
         if data is None:
-            log.error("No top-pages data available in last 7 days")
+            _step_fail("no top-pages data available in last 7 days ({})".format("; ".join(attempts)))
             return []
 
         top_pages = data["items"][0]["articles"]
         candidates = [p for p in top_pages if not should_skip(p["article"])][:PAGES_TO_CHECK]
+        skipped_note = " ({} attempts)".format(len(attempts) + 1) if attempts else ""
+        _step_ok("date={}, {} articles returned, {} candidates after filter{}".format(
+            date_used, len(top_pages), len(candidates), skipped_note))
 
-        # Fetch Wikipedia's main page featured content
+        # ===== Wikipedia Featured Content =====
+        feat_yest = datetime.now(timezone.utc) - timedelta(days=1)
+        feat_endpoint = "api.wikimedia.org/feed/v1/wikipedia/en/featured/{}/{:02d}/{:02d}".format(
+            feat_yest.year, feat_yest.month, feat_yest.day)
+        _step_req("Wikipedia Featured Content",
+                  "GET {} — TFA + In the News + On This Day for yesterday".format(feat_endpoint))
         featured = await get_wiki_featured(session)
-        log.info("Featured article: %s", featured.get("tfa", "none"))
+        tfa = featured.get("tfa", "")
+        n_news = len(featured.get("news", []))
+        n_otd = len(featured.get("onthisday", []))
+        if tfa or n_news or n_otd:
+            _step_ok("TFA: {} • {} news links • {} on-this-day links".format(
+                tfa or "—", n_news, n_otd))
+        else:
+            _step_fail("no featured content returned (HTTP failure or empty response)")
 
-        log.info(
-            "Checking %d candidates for trending (threshold %.1fx)",
-            len(candidates), TRENDING_THRESHOLD,
-        )
-
+        # ===== Trending check (per-article view history) =====
+        per_art_endpoint = "wikimedia.org/api/rest_v1/metrics/pageviews/per-article"
+        _step_req("Trending check",
+                  "GET {}/.../daily — 7d history × {} candidates (sequential per Wikimedia guidance)".format(
+                      per_art_endpoint, len(candidates)))
         trending = []
         all_results = []
         stats = {"trending": 0, "below_threshold": 0, "no_history": 0, "zero_avg": 0}
-        # Wikimedia Analytics API guidance: "wait for each request to finish
-        # before sending another request." So no parallel batching here.
+        check_started = time.monotonic()
         log_every = 25
         for i, p in enumerate(candidates, 1):
             r = await check_trending(session, p["article"], p["views"])
@@ -559,19 +632,15 @@ async def fetch_trending():
             if r["status"] == "trending":
                 trending.append(r)
             if i % log_every == 0 or i == len(candidates):
-                log.info(
-                    "Progress: %d/%d — trending=%d below=%d no_data=%d zero_avg=%d",
+                _step_info("{}/{} — trending={} below={} no_data={} zero_avg={}".format(
                     i, len(candidates),
                     stats["trending"], stats["below_threshold"],
-                    stats["no_history"], stats["zero_avg"],
-                )
+                    stats["no_history"], stats["zero_avg"]))
 
-        log.info(
-            "Candidate breakdown: %d trending, %d below threshold, "
-            "%d missing history, %d zero-avg (out of %d)",
-            stats["trending"], stats["below_threshold"],
-            stats["no_history"], stats["zero_avg"], len(candidates),
-        )
+        check_elapsed = time.monotonic() - check_started
+        _step_ok("{} trending, {} below threshold ({:.1f}x), {} missing history, {} zero-avg ({} checks in {:.1f}s)".format(
+            stats["trending"], stats["below_threshold"], TRENDING_THRESHOLD,
+            stats["no_history"], stats["zero_avg"], len(candidates), check_elapsed))
 
         # Dump the strongest near-misses so we can see what *almost* trended.
         near_misses = sorted(
@@ -579,38 +648,48 @@ async def fetch_trending():
             key=lambda x: -x["mult"],
         )[:10]
         if near_misses:
-            log.info(
-                "Top below-threshold candidates (under %.1fx):",
-                TRENDING_THRESHOLD,
-            )
+            _step_info("top below-threshold (closest to {}x):".format(TRENDING_THRESHOLD))
             for r in near_misses:
-                log.info(
-                    "  %s: %.2fx (%s views vs avg %s, %d days history)",
+                _step_info("  {}: {:.2f}x ({} views vs avg {}, {}d hist)".format(
                     r["article"], r["mult"],
                     format_views(r["views"]), format_views(r["avg"]),
-                    r.get("history_days", 0),
-                )
+                    r.get("history_days", 0)))
 
         trending.sort(key=lambda x: -x["mult"])
 
-        # Enrich only the articles we'll actually display.
-        # Process one at a time so we don't burst Wikimedia endpoints.
+        # ===== Enrichment (top N) =====
         to_enrich = trending[:DISPLAY_COUNT]
         if to_enrich:
-            log.info("Enriching top %d trending articles", len(to_enrich))
+            _step_req("Enrich top {}".format(len(to_enrich)),
+                      "Wikipedia intro + Google News RSS + Reddit search + Wikidata + langlinks per article (~8 sub-calls each)")
+            enrich_started = time.monotonic()
+            failed = []
             for article in to_enrich:
                 try:
                     await enrich_article(session, article)
                 except Exception as e:
-                    log.warning("Enrichment failed for %s: %s", article["article"], e)
+                    failed.append("{} ({})".format(article["article"], e))
                     article.setdefault("desc", "")
+            enrich_elapsed = time.monotonic() - enrich_started
+            if failed:
+                _step_fail("{}/{} enriched, {} failed: {} ({:.1f}s)".format(
+                    len(to_enrich) - len(failed), len(to_enrich),
+                    len(failed), "; ".join(failed[:3]), enrich_elapsed))
+            else:
+                _step_ok("{} articles enriched ({:.1f}s)".format(
+                    len(to_enrich), enrich_elapsed))
 
         # Tag articles that were featured on Wikipedia's main page
+        wiki_featured_count = 0
         for article in trending:
             feature = check_wiki_feature(article["article"], featured)
             article["wiki_feature"] = feature
             if feature:
-                log.info("Wiki feature: %s — %s", article["article"], feature)
+                wiki_featured_count += 1
+                _step_info("wiki feature: {} — {}".format(article["article"], feature))
+        if wiki_featured_count:
+            _step_info("{} of {} trending articles tagged with main-page feature".format(
+                wiki_featured_count, len(trending)))
 
         return trending
 
@@ -792,8 +871,14 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
 async def enrich_with_reasons(trending):
     """Replace descriptions with AI-generated trending reasons for top articles."""
     top = trending[:DISPLAY_COUNT]
+    if not top:
+        return
+    _step_req("Gemini reasoning",
+              "POST generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent — system rules + Google Search grounding (×{}, 5s spacing)".format(len(top)))
+    started = time.monotonic()
+    got_reason = 0
     async with aiohttp.ClientSession() as session:
-        for article in top:
+        for i, article in enumerate(top, 1):
             reason = await get_trending_reason(
                 session, article["article"], article["mult"],
                 wiki_desc=article.get("wiki_desc", ""),
@@ -808,9 +893,23 @@ async def enrich_with_reasons(trending):
                 wikidata_info=article.get("wikidata_info", ""),
             )
             if reason:
-                log.info("Gemini: %s -> %s", article["article"], reason)
+                got_reason += 1
                 article["desc"] = reason
+                _step_info("{}/{} {} → {}".format(
+                    i, len(top), article["article"], reason[:90]))
+            else:
+                _step_info("{}/{} {} → (no reason returned)".format(
+                    i, len(top), article["article"]))
             await asyncio.sleep(5)
+    elapsed = time.monotonic() - started
+    if got_reason == len(top):
+        _step_ok("{}/{} articles got valid descriptions ({:.1f}s)".format(
+            got_reason, len(top), elapsed))
+    elif got_reason > 0:
+        _step_fail("{}/{} articles got valid descriptions, {} fell back ({:.1f}s)".format(
+            got_reason, len(top), len(top) - got_reason, elapsed))
+    else:
+        _step_fail("0/{} articles got descriptions ({:.1f}s)".format(len(top), elapsed))
 
 
 def build_trmnl_payload(trending):
@@ -840,18 +939,23 @@ def build_trmnl_payload(trending):
 
 def push_to_trmnl(payload):
     if not TRMNL_WEBHOOK_UUID:
+        _step_req("TRMNL webhook")
+        _step_ok("skipped (no webhook configured)")
         return
     url = "{}/{}".format(TRMNL_API_URL, TRMNL_WEBHOOK_UUID)
+    body_bytes = len(json.dumps(payload))
+    _step_req("TRMNL webhook",
+              "POST {} — merge_variables ({} bytes)".format(_short_url(url), body_bytes))
     try:
         resp = requests.post(url, json=payload, timeout=15)
         if resp.status_code == 200:
-            log.info("TRMNL updated successfully")
+            _step_ok("200 OK ({} bytes sent)".format(body_bytes))
         elif resp.status_code == 429:
-            log.warning("TRMNL rate limited, will retry next cycle")
+            _step_fail("429 rate limited (will retry next cycle)")
         else:
-            log.warning("TRMNL push returned %d: %s", resp.status_code, resp.text)
+            _step_fail("{}: {}".format(resp.status_code, resp.text[:80]))
     except Exception as e:
-        log.error("TRMNL push failed: %s", e)
+        _step_fail("POST failed: {}".format(e))
 
 
 def main():
@@ -868,30 +972,29 @@ def main():
         log.info("No Gemini API key - using news headlines / Wikipedia descriptions")
 
     while True:
+        _cycle_start()
         try:
             trending = asyncio.run(fetch_trending())
-            log.info("Found %d trending articles", len(trending))
+
+            if trending and GEMINI_API_KEY:
+                asyncio.run(enrich_with_reasons(trending))
 
             if trending:
-                if GEMINI_API_KEY:
-                    asyncio.run(enrich_with_reasons(trending))
+                _step_info("top {} trending (final ranking):".format(min(10, len(trending))))
                 for i, a in enumerate(trending[:10], 1):
                     desc = a.get("desc") or "(not enriched)"
-                    log.info(
-                        "  #%d: %s (%.1fx, %s views) — %s",
+                    _step_info("  #{}: {} ({:.1f}x, {} views) — {}".format(
                         i, a["article"], a["mult"], format_views(a["views"]),
-                        desc[:80],
-                    )
+                        desc[:80]))
 
             state = {"last_fetch": datetime.now().isoformat(), "articles": trending}
             save_state(state)
 
             payload = build_trmnl_payload(trending)
-            log.info("Payload size: %d bytes", len(json.dumps(payload)))
             push_to_trmnl(payload)
         except Exception as e:
-            log.error("Fetch cycle failed: %s", e)
-
+            _step_fail("cycle aborted by exception: {}".format(e))
+        _cycle_end()
         time.sleep(POLL_INTERVAL_SEC)
 
 

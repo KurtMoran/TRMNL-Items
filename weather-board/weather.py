@@ -245,6 +245,16 @@ def _step_fail(msg):
     log.info("  ✗ %s", msg)
 
 
+def _short_url(url):
+    """Strip scheme + query string for compact log display."""
+    try:
+        from urllib.parse import urlparse
+        u = urlparse(url)
+        return "{}{}".format(u.netloc, u.path)
+    except Exception:
+        return url
+
+
 def fetch_json(url):
     """Returns (data, error_str). error_str is None on success."""
     try:
@@ -408,13 +418,15 @@ def launch_refresh_loop():
     while True:
         time.sleep(LAUNCH_REFRESH_SEC)
         try:
-            fetch_launches_smart(datetime.now())
+            _, source = fetch_launches_smart(datetime.now())
+            log.info("Launch background refresh: %s", source)
         except Exception as e:
             log.error("Launch refresh thread failed: %s", e)
 
 
 def fetch_launches_smart(now):
-    """Returns today's Vandenberg launches in local (Pacific) time.
+    """Returns (launches_today, source_str). source_str describes how the data
+    was obtained — caller logs it as part of the cycle's launches step.
 
     Cache file persists across container restarts. Refresh is gated by
     LAUNCH_REFRESH_SEC AND a date-key match — so changing POLL_INTERVAL_SEC
@@ -437,9 +449,9 @@ def fetch_launches_smart(now):
     )
     if cache_fresh:
         age = int((now - fetched_at).total_seconds())
-        log.debug("Launches: using cache (%ds old, %d entries)",
-                  age, len(cache.get("launches", [])))
-        return cache.get("launches", [])
+        cached = cache.get("launches", [])
+        return cached, "cache hit ({}s old, {} entries; refresh window {}s)".format(
+            age, len(cached), LAUNCH_REFRESH_SEC)
 
     # Pad the UTC window by ±1 day so launches near local midnight aren't missed
     # by the timezone shift.
@@ -456,13 +468,13 @@ def fetch_launches_smart(now):
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         if resp.status_code == 429:
-            log.warning("Launch Library 2 rate-limited; keeping stale cache")
-            return cache.get("launches", []) if cache.get("date_key") == today_key else []
+            stale = cache.get("launches", []) if cache.get("date_key") == today_key else []
+            return stale, "rate-limited (429); served stale cache ({} entries)".format(len(stale))
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        log.error("Launch Library 2 fetch failed: %s", e)
-        return cache.get("launches", []) if cache.get("date_key") == today_key else []
+        stale = cache.get("launches", []) if cache.get("date_key") == today_key else []
+        return stale, "fetch failed ({}); served stale cache ({} entries)".format(e, len(stale))
 
     utc_offset_hours = datetime.now().astimezone().utcoffset().total_seconds() / 3600
     launches = []
@@ -496,9 +508,8 @@ def fetch_launches_smart(now):
         "fetched_at": now.isoformat(),
         "launches": launches,
     })
-    log.info("Launches: fetched %d for %s from Vandenberg (next refresh in %dh)",
-             len(launches), today_key, LAUNCH_REFRESH_SEC // 3600)
-    return launches
+    return launches, "fresh fetch via LL2 ({} entries; next refresh in {}h)".format(
+        len(launches), LAUNCH_REFRESH_SEC // 3600)
 
 
 def pick_todays_launch(launches, now):
@@ -674,19 +685,24 @@ def build_payload():
     }
 
     # ===== Launches =====
-    _step_req("Launches", "{} (cache or LL2 fetch)".format(LAUNCH_LOCATION_LABEL))
-    launches_today = fetch_launches_smart(now)
+    _step_req("Launches",
+              "GET ll.thespacedevs.com/2.3.0/launches/ — {} (location_ids={}, ±1d window)".format(
+                  LAUNCH_LOCATION_LABEL, LL2_LOCATION_IDS))
+    launches_today, lsource = fetch_launches_smart(now)
     p.update(build_launch_fields(now, launches_today))
-    if p["has_launch"]:
-        _step_ok("today: {} {} @ {}".format(
-            p["launch_what"], p["launch_where"], p["launch_time_str"]))
+    launch_str = ("today: {} {} @ {}".format(
+        p["launch_what"], p["launch_where"], p["launch_time_str"])
+        if p["has_launch"] else "none today")
+    msg = "{} • {}".format(lsource, launch_str)
+    if "failed" in lsource or "rate-limited" in lsource:
+        _step_fail(msg)
     else:
-        _step_ok("none today ({} entries returned)".format(len(launches_today)))
+        _step_ok(msg)
 
     # ===== Open-Meteo Forecast =====
     _step_req("Open-Meteo Forecast",
-              "{} ({:.3f},{:.3f}) past 1d + 4d hourly+daily".format(
-                  LOCATION_NAME, WEATHER_LAT, WEATHER_LON))
+              "GET {} — {} ({:.3f},{:.3f}), past 1d + 4d hourly+daily".format(
+                  _short_url(FORECAST_URL), LOCATION_NAME, WEATHER_LAT, WEATHER_LON))
     forecast, err = fetch_json(FORECAST_URL)
     today_hi = None
     if not forecast:
@@ -779,8 +795,8 @@ def build_payload():
 
     # ===== Open-Meteo Marine =====
     _step_req("Open-Meteo Marine",
-              "{} ({:.3f},{:.3f}) SST + swell, 4d daily".format(
-                  OCEAN_NAME, OCEAN_LAT, OCEAN_LON))
+              "GET {} — {} ({:.3f},{:.3f}), SST + swell, 4d daily".format(
+                  _short_url(MARINE_URL), OCEAN_NAME, OCEAN_LAT, OCEAN_LON))
     marine, err = fetch_json(MARINE_URL)
     om_now_sst = None  # OM's prediction for the current hour — for calibration
     sst_by_hour = {}
@@ -848,7 +864,8 @@ def build_payload():
     # is the median of today's hourly (NDBC - OM) pairs — a single-point delta would
     # get poisoned by internal-bore spikes at Scripps Pier (5-7°F drops that recover
     # within an hour).
-    _step_req("NDBC {} buoy".format(NDBC_STATION), "Scripps Pier real-time SST")
+    _step_req("NDBC {} buoy".format(NDBC_STATION),
+              "GET {} — Scripps Pier real-time SST".format(_short_url(NDBC_URL)))
     ndbc_wtmp, ndbc_today_hourly, ndbc_err = fetch_ndbc()
     if ndbc_wtmp is None:
         _step_fail("no current reading: {}".format(ndbc_err or "data missing"))
@@ -860,7 +877,7 @@ def build_payload():
     # ===== SST calibration =====
     delta = 0
     if ndbc_wtmp is not None and om_now_sst is not None:
-        _step_req("SST calibration", "NDBC vs Open-Meteo (median bias)")
+        _step_req("SST calibration", "local computation — NDBC vs Open-Meteo (median bias)")
         delta, n_pairs = compute_calibration_delta(
             ndbc_today_hourly, sst_by_hour, today_str,
             fallback_ndbc=ndbc_wtmp, fallback_om=om_now_sst,
@@ -872,7 +889,8 @@ def build_payload():
             delta, n_pairs))
 
     # ===== Today's water-temp curve =====
-    _step_req("Build today's water-temp curve", "NDBC actual + calibrated OM")
+    _step_req("Build today's water-temp curve",
+              "local computation — NDBC actual (past hours) + calibrated OM (future hours)")
     today_curve = build_today_curve(
         now, ndbc_today_hourly, sst_by_hour, delta,
         sunrise_x=p.get("sunrise_x"), sunset_x=p.get("sunset_x"),
@@ -886,7 +904,9 @@ def build_payload():
         _step_fail("no curve data (Marine + NDBC both empty)")
 
     # ===== Air Quality =====
-    _step_req("Open-Meteo Air Quality", "current US AQI")
+    _step_req("Open-Meteo Air Quality",
+              "GET {} — current US AQI ({:.3f},{:.3f})".format(
+                  _short_url(AIR_QUALITY_URL), WEATHER_LAT, WEATHER_LON))
     aqi_data, err = fetch_json(AIR_QUALITY_URL)
     if not aqi_data:
         _step_fail("HTTP failed: {}".format(err or "no data"))
@@ -899,8 +919,11 @@ def build_payload():
             _step_fail("us_aqi missing in response")
 
     # ===== NOAA Tides =====
-    _step_req("NOAA Tides", "station {} (48h predictions)".format(TIDE_STATION_ID))
-    tide_data, err = fetch_json(tide_url())
+    tide_endpoint = tide_url()
+    _step_req("NOAA Tides",
+              "GET {} — station {} (48h hi/lo predictions)".format(
+                  _short_url(tide_endpoint), TIDE_STATION_ID))
+    tide_data, err = fetch_json(tide_endpoint)
     if not tide_data:
         _step_fail("HTTP failed: {}".format(err or "no data"))
     else:
@@ -969,12 +992,14 @@ def push_to_trmnl(payload):
         _step_req("TRMNL webhook")
         _step_ok("skipped (no webhook configured)")
         return
-    _step_req("TRMNL webhook", "POST merge_variables")
     url = "{}/{}".format(TRMNL_API_URL, TRMNL_WEBHOOK_UUID)
+    body_bytes = len(json.dumps(payload))
+    _step_req("TRMNL webhook",
+              "POST {} — merge_variables ({} bytes)".format(_short_url(url), body_bytes))
     try:
         resp = requests.post(url, json=payload, timeout=15)
         if resp.status_code == 200:
-            _step_ok("200 OK")
+            _step_ok("200 OK ({} bytes sent)".format(body_bytes))
         elif resp.status_code == 429:
             _step_fail("429 rate limited (will retry next cycle)")
         else:
