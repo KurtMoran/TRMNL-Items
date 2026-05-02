@@ -469,8 +469,14 @@
         </div>
         <div class="curve-wrap">
           <svg viewBox="0 0 380 50" preserveAspectRatio="none">
+            {% for tide in today_tides %}
+              <line x1="{{ tide.x }}" y1="0" x2="{{ tide.x }}" y2="50" stroke="#000" stroke-width="0.6" stroke-dasharray="1.5 1.5" opacity="0.4"/>
+            {% endfor %}
             <polyline fill="none" stroke="#000" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="{{ today_curve_points }}"/>
             <circle cx="{{ today_now_x }}" cy="{{ today_now_y }}" r="3.5" fill="#000"/>
+            {% for tide in today_tides %}
+              <text x="{{ tide.x }}" y="9" text-anchor="middle" font-size="9" font-weight="700" fill="#000">{{ tide.type }}</text>
+            {% endfor %}
           </svg>
           <div class="axis">
             <span>12a</span><span>6a</span><span>noon</span><span>6p</span><span>12a</span>

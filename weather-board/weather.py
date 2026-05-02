@@ -206,7 +206,8 @@ def fetch_json(url, name):
 
 
 def fetch_ndbc():
-    """Returns (current_wtmp_F_or_None, hourly_today: dict {hour_int: temp_F}).
+    """Returns (current_wtmp_F_or_None, hourly_today: dict {hour_int: temp_F_float}).
+    Hourly values are kept as floats (~0.18°F precision) so the curve renders smoothly.
     NDBC realtime2 reports UTC; we convert to local time for the today-curve.
     """
     hourly_today = {}
@@ -230,14 +231,13 @@ def fetch_ndbc():
                 wtmp_c = float(wtmp)
                 if wtmp_c > 50 or wtmp_c < -5:
                     continue
-                wtmp_f = round(wtmp_c * 9 / 5 + 32)
+                wtmp_f = wtmp_c * 9 / 5 + 32
                 if current is None:
-                    current = wtmp_f
-                # Convert UTC sample timestamp -> local; keep first sample per local hour for "today"
+                    current = round(wtmp_f)  # display value is rounded
                 sample_utc = datetime(yr, mo, dy, hr, mn)
                 sample_local = sample_utc + timedelta(hours=utc_offset_hours)
                 if sample_local.date() == local_today and sample_local.hour not in hourly_today:
-                    hourly_today[sample_local.hour] = wtmp_f
+                    hourly_today[sample_local.hour] = wtmp_f  # keep float for curve
             except (ValueError, IndexError):
                 continue
     except Exception as e:
@@ -262,58 +262,48 @@ def _hour_label(h):
     return "{}pm".format(h - 12)
 
 
-# SVG dimensions for the today-water-curve sparkline (matches template).
-CURVE_W = 380
-CURVE_H = 50
+# SVG dimensions for the today-water-curve sparkline.
+WATER_CURVE_W, WATER_CURVE_H = 380, 50
+
+
+def _curve_geometry(series, now, w, h, pad):
+    """Returns (points, now_x, now_y, hi_temp, hi_hour) from {hour: temp}."""
+    hours = sorted(series)
+    temps = [series[k] for k in hours]
+    t_min, t_max = min(temps), max(temps)
+    span = max(t_max - t_min, 1)
+
+    def x_of(k): return round(k / 23 * w, 1)
+    def y_of(t): return round(h - pad - (t - t_min) / span * (h - 2 * pad), 1)
+    points = " ".join("{},{}".format(x_of(k), y_of(series[k])) for k in hours)
+
+    cur_hour = now.hour + now.minute / 60
+    cur_temp = series.get(now.hour) or series[min(hours, key=lambda k: abs(k - now.hour))]
+    now_x = round(min(max(cur_hour / 23 * w, 0), w), 1)
+    now_y = y_of(cur_temp)
+    hi_hour = hours[temps.index(t_max)]
+    return points, now_x, now_y, t_max, hi_hour
 
 
 def build_today_curve(now, ndbc_hourly, om_hourly, delta):
     """Merge NDBC actuals (past) + calibrated OM (future) into one 24-hour
     water-temp curve. Returns dict of payload fields, or {} if no data."""
     today_str = now.strftime("%Y-%m-%d")
-    series = {}  # hour -> temp_F
-    for h in range(24):
-        if h <= now.hour and h in ndbc_hourly:
-            series[h] = ndbc_hourly[h]
+    series = {}
+    for k in range(24):
+        if k <= now.hour and k in ndbc_hourly:
+            series[k] = ndbc_hourly[k]  # float
         else:
-            om = om_hourly.get("{}T{:02d}:00".format(today_str, h))
+            om = om_hourly.get("{}T{:02d}:00".format(today_str, k))
             if om is not None:
-                series[h] = round(om + delta)
+                series[k] = om + delta  # float, no rounding
     if not series:
         return {}
-
-    hours = sorted(series)
-    temps = [series[h] for h in hours]
-    t_min, t_max = min(temps), max(temps)
-    # Avoid divide-by-zero if perfectly flat
-    span = max(t_max - t_min, 1)
-
-    # Build polyline points (x: hour 0..23 -> 0..CURVE_W, y: t_max -> 4, t_min -> CURVE_H-4)
-    pad = 4
-    def x_of(h): return round(h / 23 * CURVE_W, 1)
-    def y_of(t): return round(CURVE_H - pad - (t - t_min) / span * (CURVE_H - 2 * pad), 1)
-    points = " ".join("{},{}".format(x_of(h), y_of(series[h])) for h in hours)
-
-    # Peak hour and time
-    hi_temp = t_max
-    hi_hour = hours[temps.index(t_max)]
-
-    # Now marker: position on the curve at current hour (interpolated)
-    cur_hour = now.hour + now.minute / 60
-    cur_temp = series.get(now.hour)
-    if cur_temp is None:
-        # find nearest available hour
-        nearest = min(hours, key=lambda h: abs(h - now.hour))
-        cur_temp = series[nearest]
-    now_x = round(min(max(cur_hour / 23 * CURVE_W, 0), CURVE_W), 1)
-    now_y = y_of(cur_temp)
-
+    points, nx, ny, hi_t, hi_h = _curve_geometry(series, now, WATER_CURVE_W, WATER_CURVE_H, pad=4)
     return {
         "today_curve_points": points,
-        "today_hi": hi_temp,
-        "today_hi_time": _hour_label(hi_hour),
-        "today_now_x": now_x,
-        "today_now_y": now_y,
+        "today_hi": round(hi_t), "today_hi_time": _hour_label(hi_h),
+        "today_now_x": nx, "today_now_y": ny,
     }
 
 
@@ -338,6 +328,7 @@ def build_payload():
         "low_time": "--", "low_height": "",
         "today_curve_points": "", "today_hi": "--", "today_hi_time": "--",
         "today_now_x": 0, "today_now_y": 0,
+        "today_tides": [],
     }
 
     if forecast:
@@ -516,14 +507,25 @@ def build_payload():
     if tide_data:
         next_high = None
         next_low = None
+        today_date = now.date()
+        today_tides = []  # markers for the today-water curve
         for pred in tide_data.get("predictions", []):
             try:
                 t_dt = datetime.strptime(pred["t"], "%Y-%m-%d %H:%M")
             except (ValueError, KeyError):
                 continue
+            kind = pred.get("type", "")
+            # Collect today's tide events for the curve markers
+            if t_dt.date() == today_date and kind in ("H", "L"):
+                hour_frac = t_dt.hour + t_dt.minute / 60
+                today_tides.append({
+                    "x": round(hour_frac / 23 * WATER_CURVE_W, 1),
+                    "type": kind,
+                    "label": _hour_label(t_dt.hour) if t_dt.minute < 30 else _hour_label((t_dt.hour + 1) % 24),
+                })
+            # Tide widget shows the next high/low after now
             if t_dt <= now:
                 continue
-            kind = pred.get("type", "")
             try:
                 height = float(pred.get("v", 0))
             except (TypeError, ValueError):
@@ -532,14 +534,13 @@ def build_payload():
                 next_high = (t_dt, height)
             elif kind == "L" and next_low is None:
                 next_low = (t_dt, height)
-            if next_high and next_low:
-                break
         if next_high:
             p["high_time"] = fmt_time(next_high[0].isoformat())
             p["high_height"] = "{:.1f}ft".format(next_high[1])
         if next_low:
             p["low_time"] = fmt_time(next_low[0].isoformat())
             p["low_height"] = "{:.1f}ft".format(next_low[1])
+        p["today_tides"] = today_tides
 
     return {"merge_variables": p}
 
