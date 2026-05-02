@@ -328,6 +328,33 @@ def _sunset_marker_y(curve_y):
 SUNRISE_MARKER_Y = 4  # always at the top of the chart
 
 
+def compute_calibration_delta(ndbc_today_hourly, sst_by_hour, today_str,
+                               fallback_ndbc, fallback_om):
+    """Median of today's hourly (NDBC - OM) pairs, in °F.
+
+    Pairs each NDBC hourly sample with OM's modeled SST for the same wall-clock
+    hour and returns the median difference. Robust to single-hour outliers from
+    internal-bore events at Scripps Pier (5-7°F transients that recover within
+    an hour). Falls back to the single-point delta if fewer than 3 pairs.
+
+    Returns (delta_F, n_pairs).
+    """
+    diffs = []
+    for hour_int, ndbc_f in ndbc_today_hourly.items():
+        om_f = sst_by_hour.get("{}T{:02d}:00".format(today_str, hour_int))
+        if om_f is None:
+            continue
+        diffs.append(ndbc_f - om_f)
+    if len(diffs) >= 3:
+        diffs.sort()
+        n = len(diffs)
+        median = diffs[n // 2] if n % 2 == 1 else (diffs[n // 2 - 1] + diffs[n // 2]) / 2
+        return median, n
+    if fallback_ndbc is not None and fallback_om is not None:
+        return fallback_ndbc - fallback_om, len(diffs)
+    return 0, len(diffs)
+
+
 def build_today_curve(now, ndbc_hourly, om_hourly, delta, sunrise_x=None, sunset_x=None):
     """Merge NDBC actuals (past) + calibrated OM (future) into one 24-hour
     water-temp curve. Returns dict of payload fields, or {} if no data."""
@@ -541,15 +568,20 @@ def build_payload():
 
     # Prefer the NDBC sensor reading at Scripps Pier over Open-Meteo's modeled SST.
     # Also calibrate the forecast: Open-Meteo's offshore-modeled SST runs ~2-4°F warm
-    # vs the nearshore buoy in summer/fall (upwelling). Apply (NDBC_now - OM_same_hour)
-    # to the forecast — apples-to-apples avoids the diurnal bias (mean range ~5°F, up to
-    # 11°F+ in summer). Validated against 4 years of paired data.
+    # vs the nearshore buoy in summer/fall (upwelling). The bias is the median of
+    # today's hourly (NDBC - OM) pairs — a single-point delta would get poisoned by
+    # internal-bore spikes at Scripps Pier (5-7°F drops that recover within an hour).
     ndbc_wtmp, ndbc_today_hourly = fetch_ndbc()
     delta = 0
     if ndbc_wtmp is not None:
         p["ocean"] = ndbc_wtmp
         if om_now_sst is not None:
-            delta = ndbc_wtmp - om_now_sst
+            delta, n_pairs = compute_calibration_delta(
+                ndbc_today_hourly, sst_by_hour, today_str,
+                fallback_ndbc=ndbc_wtmp, fallback_om=om_now_sst,
+            )
+            log.info("SST calibration delta=%+.2f°F (n=%d paired hours)",
+                     delta, n_pairs)
             for day in p["ocean_forecast"]:
                 if isinstance(day.get("ocean"), (int, float)):
                     day["ocean"] = round(day["ocean"] + delta)
