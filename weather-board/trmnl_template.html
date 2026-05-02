@@ -224,7 +224,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: center;
     line-height: 1;
   }
   .ocean .item:last-child { flex: 1.6; }
@@ -470,10 +470,10 @@
         <div class="curve-wrap">
           <svg viewBox="0 0 380 50" preserveAspectRatio="none">
             {% for tide in today_tides %}
-              <line x1="{{ tide.x }}" y1="0" x2="{{ tide.x }}" y2="50" stroke="#000" stroke-width="0.6" stroke-dasharray="1.5 1.5" opacity="0.4"/>
+              <line x1="{{ tide.x }}" y1="0" x2="{{ tide.x }}" y2="50" stroke="#000" stroke-width="1" stroke-dasharray="2.5 2.5" opacity="0.5"/>
             {% endfor %}
-            {% if sunrise_x %}<line x1="{{ sunrise_x }}" y1="{{ sunrise_sun_y | plus: 2 }}" x2="{{ sunrise_x }}" y2="{{ sunrise_y_curve }}" stroke="#000" stroke-width="0.6" stroke-dasharray="1.5 1.5" opacity="0.4"/>{% endif %}
-            {% if sunset_x %}<line x1="{{ sunset_x }}" y1="{{ sunset_y_curve }}" x2="{{ sunset_x }}" y2="{{ sunset_sun_y | minus: 2 }}" stroke="#000" stroke-width="0.6" stroke-dasharray="1.5 1.5" opacity="0.4"/>{% endif %}
+            {% if sunrise_x %}<line x1="{{ sunrise_x }}" y1="{{ sunrise_sun_y | plus: 2 }}" x2="{{ sunrise_x }}" y2="{{ sunrise_y_curve }}" stroke="#000" stroke-width="1" stroke-dasharray="2.5 2.5" opacity="0.5"/>{% endif %}
+            {% if sunset_x %}<line x1="{{ sunset_x }}" y1="{{ sunset_y_curve }}" x2="{{ sunset_x }}" y2="{{ sunset_sun_y | minus: 2 }}" stroke="#000" stroke-width="1" stroke-dasharray="2.5 2.5" opacity="0.5"/>{% endif %}
             <polyline fill="none" stroke="#000" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="{{ today_curve_points }}"/>
             <circle cx="{{ today_now_x }}" cy="{{ today_now_y }}" r="3.5" fill="#000"/>
             {% for tide in today_tides %}
