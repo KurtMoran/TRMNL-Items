@@ -29,6 +29,10 @@ TRMNL_WEBHOOK_UUID = os.getenv("TRMNL_WEBHOOK_UUID", "")
 TRMNL_API_URL = "https://trmnl.com/api/custom_plugins"
 DATA_FILE = os.getenv("DATA_FILE", "/data/wiki_state.json")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Wikimedia rate-limits the per-article endpoint at roughly 8-9 req/s sustained
+# (empirically: 500 unthrottled requests trigger ~60 429s starting at iter ~400).
+# 150ms = 6.6 req/s gives a safety margin while only adding ~50s to a 500-page cycle.
+WIKIMEDIA_THROTTLE_MS = int(os.getenv("WIKIMEDIA_THROTTLE_MS", "150"))
 # Wikimedia Analytics API requires identifying User-Agent in this format:
 # https://wikimedia.org/api/rest_v1/ (Access policy → Client identification)
 USER_AGENT = (
@@ -86,12 +90,16 @@ def format_mult(m):
 # ============= Per-cycle structured logging =============
 
 _cycle_stats = {"ok": 0, "fail": 0, "started_at": None}
+_cycle_429 = {"hit": 0, "recovered": 0, "exhausted": 0}
 
 
 def _cycle_start():
     _cycle_stats["ok"] = 0
     _cycle_stats["fail"] = 0
     _cycle_stats["started_at"] = time.monotonic()
+    _cycle_429["hit"] = 0
+    _cycle_429["recovered"] = 0
+    _cycle_429["exhausted"] = 0
     log.info("─── %s • cycle start ───",
              datetime.now().strftime("%-I:%M:%S %p"))
 
@@ -162,18 +170,40 @@ async def get_article_views(session, article, days_back=7):
         "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
         "en.wikipedia/all-access/user/{}/daily/{}/{}"
     ).format(article, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"))
-    try:
-        async with session.get(url, headers={"User-Agent": USER_AGENT}) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return data.get("items", [])
-            # Per Wikimedia docs, 404 means "zero views or data not loaded";
-            # not an error worth alerting on.
-            if resp.status == 404:
+    # Wikimedia rate-limits bursts. On 429 we honor Retry-After (capped) and
+    # try again — silent unless retries are exhausted. Per-cycle counters in
+    # _cycle_429 surface the rate-limit pressure in the trending step's summary.
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            async with session.get(url, headers={"User-Agent": USER_AGENT}) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if attempt > 0:
+                        _cycle_429["recovered"] += 1
+                    return data.get("items", [])
+                # Per Wikimedia docs, 404 means "zero views or data not loaded";
+                # not an error worth alerting on.
+                if resp.status == 404:
+                    return []
+                if resp.status == 429:
+                    _cycle_429["hit"] += 1
+                    if attempt < max_attempts - 1:
+                        try:
+                            wait_s = float(resp.headers.get("Retry-After", "0"))
+                        except (TypeError, ValueError):
+                            wait_s = 0
+                        if wait_s <= 0:
+                            wait_s = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s
+                        await asyncio.sleep(min(wait_s, 5.0))
+                        continue
+                    _cycle_429["exhausted"] += 1
+                    return []
+                log.warning("Views fetch returned HTTP %d for %s", resp.status, article)
                 return []
-            log.warning("Views fetch returned HTTP %d for %s", resp.status, article)
-    except Exception as e:
-        log.warning("Views fetch exception for %s: %s", article, e)
+        except Exception as e:
+            log.warning("Views fetch exception for %s: %s", article, e)
+            return []
     return []
 
 
@@ -617,9 +647,11 @@ async def fetch_trending():
 
         # ===== Trending check (per-article view history) =====
         per_art_endpoint = "wikimedia.org/api/rest_v1/metrics/pageviews/per-article"
+        throttle_s = WIKIMEDIA_THROTTLE_MS / 1000.0
         _step_req("Trending check",
-                  "GET {}/.../daily — 7d history × {} candidates (sequential per Wikimedia guidance)".format(
-                      per_art_endpoint, len(candidates)))
+                  "GET {}/.../daily — 7d history × {} candidates (sequential, {}ms throttle ≈ {:.1f} req/s)".format(
+                      per_art_endpoint, len(candidates),
+                      WIKIMEDIA_THROTTLE_MS, 1.0 / throttle_s if throttle_s else 0))
         trending = []
         all_results = []
         stats = {"trending": 0, "below_threshold": 0, "no_history": 0, "zero_avg": 0}
@@ -636,11 +668,18 @@ async def fetch_trending():
                     i, len(candidates),
                     stats["trending"], stats["below_threshold"],
                     stats["no_history"], stats["zero_avg"]))
+            if i < len(candidates) and throttle_s > 0:
+                await asyncio.sleep(throttle_s)
 
         check_elapsed = time.monotonic() - check_started
-        _step_ok("{} trending, {} below threshold ({:.1f}x), {} missing history, {} zero-avg ({} checks in {:.1f}s)".format(
+        rate_suffix = ""
+        if _cycle_429["hit"]:
+            rate_suffix = " | rate-limit pressure: {} 429s ({} recovered, {} exhausted)".format(
+                _cycle_429["hit"], _cycle_429["recovered"], _cycle_429["exhausted"])
+        _step_ok("{} trending, {} below threshold ({:.1f}x), {} missing history, {} zero-avg ({} checks in {:.1f}s){}".format(
             stats["trending"], stats["below_threshold"], TRENDING_THRESHOLD,
-            stats["no_history"], stats["zero_avg"], len(candidates), check_elapsed))
+            stats["no_history"], stats["zero_avg"], len(candidates), check_elapsed,
+            rate_suffix))
 
         # Dump the strongest near-misses so we can see what *almost* trended.
         near_misses = sorted(
