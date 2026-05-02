@@ -65,7 +65,7 @@ docker run -d \
 | `LOCATION_NAME` | No | San Diego | Footer label |
 | `OCEAN_LAT` | No | 32.8541 | Ocean/marine latitude (default: La Jolla Shores) |
 | `OCEAN_LON` | No | -117.2618 | Ocean/marine longitude |
-| `OCEAN_NAME` | No | La Jolla Shores | Ocean section label |
+| `OCEAN_NAME` | No | Ocean | Ocean section label |
 | `SAME_THRESHOLD` | No | 1 | °F window for "Same as yesterday" |
 | `POLL_INTERVAL_SEC` | No | 900 | Seconds between cycles (default: 15 min) |
 | `TZ` | No | America/Los_Angeles | Timezone for timestamps & API |
