@@ -271,7 +271,7 @@ def _iso_to_curve_x(iso_str):
     try:
         dt = datetime.fromisoformat(iso_str)
         hour_frac = dt.hour + dt.minute / 60
-        return round(hour_frac / 23 * WATER_CURVE_W, 1)
+        return round(hour_frac / 24 * WATER_CURVE_W, 1)
     except Exception:
         return None
 
@@ -283,13 +283,13 @@ def _curve_geometry(series, now, w, h, pad):
     t_min, t_max = min(temps), max(temps)
     span = max(t_max - t_min, 1)
 
-    def x_of(k): return round(k / 23 * w, 1)
+    def x_of(k): return round(k / 24 * w, 1)
     def y_of(t): return round(h - pad - (t - t_min) / span * (h - 2 * pad), 1)
     points = " ".join("{},{}".format(x_of(k), y_of(series[k])) for k in hours)
 
     cur_hour = now.hour + now.minute / 60
     cur_temp = series.get(now.hour) or series[min(hours, key=lambda k: abs(k - now.hour))]
-    now_x = round(min(max(cur_hour / 23 * w, 0), w), 1)
+    now_x = round(min(max(cur_hour / 24 * w, 0), w), 1)
     now_y = y_of(cur_temp)
     hi_hour = hours[temps.index(t_max)]
     return points, now_x, now_y, t_max, hi_hour
@@ -375,7 +375,7 @@ def build_today_curve(now, ndbc_hourly, om_hourly, delta, sunrise_x=None, sunset
     def y_at_x(x):
         if x is None:
             return None
-        return _interp_curve_y(series, x / WATER_CURVE_W * 23,
+        return _interp_curve_y(series, x / WATER_CURVE_W * 24,
                                WATER_CURVE_W, WATER_CURVE_H, pad=4)
 
     sunrise_y_curve = y_at_x(sunrise_x)
@@ -617,7 +617,7 @@ def build_payload():
             if t_dt.date() == today_date and kind in ("H", "L"):
                 hour_frac = t_dt.hour + t_dt.minute / 60
                 today_tides.append({
-                    "x": round(hour_frac / 23 * WATER_CURVE_W, 1),
+                    "x": round(hour_frac / 24 * WATER_CURVE_W, 1),
                     "type": kind,
                     "label": _hour_label(t_dt.hour) if t_dt.minute < 30 else _hour_label((t_dt.hour + 1) % 24),
                 })
