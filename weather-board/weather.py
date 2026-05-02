@@ -356,17 +356,16 @@ def compute_calibration_delta(ndbc_today_hourly, sst_by_hour, today_str,
 
 
 def build_today_curve(now, ndbc_hourly, om_hourly, delta, sunrise_x=None, sunset_x=None):
-    """Merge NDBC actuals (past) + calibrated OM (future) into one 24-hour
-    water-temp curve. Returns dict of payload fields, or {} if no data."""
+    """Calibrated OM forecast across the full 24-hour day. NDBC samples are
+    still used upstream to compute `delta`, but the curve itself stays smooth
+    by avoiding the spikey raw sensor values. Returns dict of payload fields,
+    or {} if no data."""
     today_str = now.strftime("%Y-%m-%d")
     series = {}
     for k in range(24):
-        if k <= now.hour and k in ndbc_hourly:
-            series[k] = ndbc_hourly[k]  # float
-        else:
-            om = om_hourly.get("{}T{:02d}:00".format(today_str, k))
-            if om is not None:
-                series[k] = om + delta  # float, no rounding
+        om = om_hourly.get("{}T{:02d}:00".format(today_str, k))
+        if om is not None:
+            series[k] = om + delta  # float, no rounding
     if not series:
         return {}
     points, nx, ny, hi_t, hi_h = _curve_geometry(series, now, WATER_CURVE_W, WATER_CURVE_H, pad=4)
