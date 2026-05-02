@@ -266,6 +266,16 @@ def _hour_label(h):
 WATER_CURVE_W, WATER_CURVE_H = 380, 50
 
 
+def _iso_to_curve_x(iso_str):
+    """ISO datetime '2026-05-02T05:55' -> x position on the 24h water curve."""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        hour_frac = dt.hour + dt.minute / 60
+        return round(hour_frac / 23 * WATER_CURVE_W, 1)
+    except Exception:
+        return None
+
+
 def _curve_geometry(series, now, w, h, pad):
     """Returns (points, now_x, now_y, hi_temp, hi_hour) from {hour: temp}."""
     hours = sorted(series)
@@ -285,7 +295,40 @@ def _curve_geometry(series, now, w, h, pad):
     return points, now_x, now_y, t_max, hi_hour
 
 
-def build_today_curve(now, ndbc_hourly, om_hourly, delta):
+def _interp_curve_y(series, hour_frac, w, h, pad):
+    """Linear interpolation of the SVG curve y-value at a fractional hour."""
+    if not series:
+        return None
+    hours = sorted(series)
+    temps = [series[k] for k in hours]
+    t_min, t_max = min(temps), max(temps)
+    span = max(t_max - t_min, 1)
+    if hour_frac <= hours[0]:
+        t = temps[0]
+    elif hour_frac >= hours[-1]:
+        t = temps[-1]
+    else:
+        for i in range(1, len(hours)):
+            if hours[i] >= hour_frac:
+                lo, hi_h = hours[i - 1], hours[i]
+                frac = (hour_frac - lo) / (hi_h - lo)
+                t = temps[i - 1] + (temps[i] - temps[i - 1]) * frac
+                break
+    return round(h - pad - (t - t_min) / span * (h - 2 * pad), 1)
+
+
+def _sunset_marker_y(curve_y):
+    """Sunset sits at chart bottom, nudged down if curve dips so it never overlaps."""
+    default_y, cap_y = 44, 48
+    if curve_y is None:
+        return default_y
+    return max(default_y, min(curve_y + 6, cap_y))
+
+
+SUNRISE_MARKER_Y = 4  # always at the top of the chart
+
+
+def build_today_curve(now, ndbc_hourly, om_hourly, delta, sunrise_x=None, sunset_x=None):
     """Merge NDBC actuals (past) + calibrated OM (future) into one 24-hour
     water-temp curve. Returns dict of payload fields, or {} if no data."""
     today_str = now.strftime("%Y-%m-%d")
@@ -300,10 +343,25 @@ def build_today_curve(now, ndbc_hourly, om_hourly, delta):
     if not series:
         return {}
     points, nx, ny, hi_t, hi_h = _curve_geometry(series, now, WATER_CURVE_W, WATER_CURVE_H, pad=4)
+
+    # Interpolate curve y at sunrise/sunset, then compute where the sun glyph sits.
+    def y_at_x(x):
+        if x is None:
+            return None
+        return _interp_curve_y(series, x / WATER_CURVE_W * 23,
+                               WATER_CURVE_W, WATER_CURVE_H, pad=4)
+
+    sunrise_y_curve = y_at_x(sunrise_x)
+    sunset_y_curve = y_at_x(sunset_x)
+
     return {
         "today_curve_points": points,
         "today_hi": round(hi_t), "today_hi_time": _hour_label(hi_h),
         "today_now_x": nx, "today_now_y": ny,
+        "sunrise_y_curve": sunrise_y_curve,
+        "sunset_y_curve": sunset_y_curve,
+        "sunrise_sun_y": SUNRISE_MARKER_Y,
+        "sunset_sun_y": _sunset_marker_y(sunset_y_curve),
     }
 
 
@@ -329,6 +387,9 @@ def build_payload():
         "today_curve_points": "", "today_hi": "--", "today_hi_time": "--",
         "today_now_x": 0, "today_now_y": 0,
         "today_tides": [],
+        "sunrise_x": None, "sunset_x": None,
+        "sunrise_y_curve": None, "sunset_y_curve": None,
+        "sunrise_sun_y": 4, "sunset_sun_y": 44,
     }
 
     if forecast:
@@ -392,8 +453,10 @@ def build_payload():
 
         if len(sunrise) > 1:
             p["rise"] = fmt_time(sunrise[1])
+            p["sunrise_x"] = _iso_to_curve_x(sunrise[1])
         if len(sunset) > 1:
             p["set"] = fmt_time(sunset[1])
+            p["sunset_x"] = _iso_to_curve_x(sunset[1])
 
         forecast_days = []
         for i in range(2, 5):
@@ -492,7 +555,10 @@ def build_payload():
                     day["ocean"] = round(day["ocean"] + delta)
 
     # Today's water-temp curve: NDBC actuals for past hours, calibrated OM for future.
-    today_curve = build_today_curve(now, ndbc_today_hourly, sst_by_hour, delta)
+    today_curve = build_today_curve(
+        now, ndbc_today_hourly, sst_by_hour, delta,
+        sunrise_x=p.get("sunrise_x"), sunset_x=p.get("sunset_x"),
+    )
     if today_curve:
         p.update(today_curve)
 

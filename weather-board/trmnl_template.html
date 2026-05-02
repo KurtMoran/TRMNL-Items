@@ -472,11 +472,21 @@
             {% for tide in today_tides %}
               <line x1="{{ tide.x }}" y1="0" x2="{{ tide.x }}" y2="50" stroke="#000" stroke-width="0.6" stroke-dasharray="1.5 1.5" opacity="0.4"/>
             {% endfor %}
+            {% if sunrise_x %}<line x1="{{ sunrise_x }}" y1="{{ sunrise_sun_y | plus: 2 }}" x2="{{ sunrise_x }}" y2="{{ sunrise_y_curve }}" stroke="#000" stroke-width="0.6" stroke-dasharray="1.5 1.5" opacity="0.4"/>{% endif %}
+            {% if sunset_x %}<line x1="{{ sunset_x }}" y1="{{ sunset_y_curve }}" x2="{{ sunset_x }}" y2="{{ sunset_sun_y | minus: 2 }}" stroke="#000" stroke-width="0.6" stroke-dasharray="1.5 1.5" opacity="0.4"/>{% endif %}
             <polyline fill="none" stroke="#000" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="{{ today_curve_points }}"/>
             <circle cx="{{ today_now_x }}" cy="{{ today_now_y }}" r="3.5" fill="#000"/>
             {% for tide in today_tides %}
               <text x="{{ tide.x }}" y="9" text-anchor="middle" font-size="9" font-weight="700" fill="#000">{{ tide.type }}</text>
             {% endfor %}
+            {% if sunrise_x %}
+              <circle cx="{{ sunrise_x }}" cy="{{ sunrise_sun_y }}" r="2" fill="#000"/>
+              <path d="M {{ sunrise_x | minus: 4 }} {{ sunrise_sun_y }} h -1.5 M {{ sunrise_x | plus: 4 }} {{ sunrise_sun_y }} h 1.5 M {{ sunrise_x | plus: 3 }} {{ sunrise_sun_y | plus: 3 }} l 1.3 1.3 M {{ sunrise_x | minus: 3 }} {{ sunrise_sun_y | plus: 3 }} l -1.3 1.3" stroke="#000" stroke-width="0.9" stroke-linecap="round"/>
+            {% endif %}
+            {% if sunset_x %}
+              <circle cx="{{ sunset_x }}" cy="{{ sunset_sun_y }}" r="2" fill="#000"/>
+              <path d="M {{ sunset_x | minus: 4 }} {{ sunset_sun_y }} h -1.5 M {{ sunset_x | plus: 4 }} {{ sunset_sun_y }} h 1.5 M {{ sunset_x | plus: 3 }} {{ sunset_sun_y | minus: 3 }} l 1.3 -1.3 M {{ sunset_x | minus: 3 }} {{ sunset_sun_y | minus: 3 }} l -1.3 -1.3" stroke="#000" stroke-width="0.9" stroke-linecap="round"/>
+            {% endif %}
           </svg>
           <div class="axis">
             <span>12a</span><span>6a</span><span>noon</span><span>6p</span><span>12a</span>
