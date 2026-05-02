@@ -303,25 +303,48 @@
   .ocean .item .val .energy-bar { display: inline-flex; height: 18px; }
   .ocean .item .val .energy-bar svg { width: 36px; height: 18px; }
   .ocean .item .val .dim { opacity: 0.55; font-weight: 600; font-size: 13px; margin-left: 2px; }
-  .ocean .item .val.tide-val {
-    display: flex;
-    flex-direction: row;
-    gap: 12px;
-    align-items: baseline;
+  .ocean .item.tide-item {
+    flex-direction: column;
     justify-content: center;
+    gap: 6px;
+    padding: 0 6px;
+  }
+  .ocean .tide-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    line-height: 1.1;
+  }
+  .ocean .tide-block .tide-line {
+    display: flex;
+    gap: 4px;
+    align-items: baseline;
     font-size: 15px;
     font-weight: 700;
     letter-spacing: -0.3px;
   }
-  .ocean .item .val.tide-val .tide-group {
-    display: flex;
-    gap: 4px;
-    align-items: baseline;
-  }
-  .ocean .item .val.tide-val .height {
+  .ocean .tide-block .tide-line .height {
     opacity: 0.55;
     font-weight: 600;
     font-size: 12px;
+  }
+  .ocean .tide-block .tide-surf {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+  }
+  .ocean .tide-block .tide-surf .surf-wave {
+    display: inline-flex;
+    width: 24px;
+    height: 12px;
+  }
+  .ocean .tide-block .tide-surf .surf-wave svg {
+    width: 24px;
+    height: 12px;
   }
   .footer {
     border-top: 1px solid #ccc;
@@ -493,12 +516,47 @@
           </div>
         </div>
       </div>
-      <div class="item">
-        <span class="label">Tides</span>
-        <span class="val tide-val">
-          <span class="tide-group"><span class="arrow">&#8593;</span><span class="time">{{ high_time }}</span><span class="height">{{ high_height }}</span></span>
-          <span class="tide-group"><span class="arrow">&#8595;</span><span class="time">{{ low_time }}</span><span class="height">{{ low_height }}</span></span>
-        </span>
+      <div class="item tide-item">
+        <div class="tide-block">
+          <div class="tide-line">
+            <span class="arrow">&#8593;</span>
+            <span class="time">{{ high_time }}</span>
+            <span class="height">{{ high_height }}</span>
+          </div>
+          <div class="tide-surf">
+            <span class="surf-wave">
+              {% case high_energy_tier %}
+                {% when 1 %}{{ wave_1 }}
+                {% when 2 %}{{ wave_2 }}
+                {% when 3 %}{{ wave_3 }}
+                {% when 4 %}{{ wave_4 }}
+                {% when 5 %}{{ wave_5 }}
+                {% else %}{{ wave_0 }}
+              {% endcase %}
+            </span>
+            <span class="surf-text">{{ high_swell }}{% if high_energy %} &middot; {{ high_energy }}{% endif %}</span>
+          </div>
+        </div>
+        <div class="tide-block">
+          <div class="tide-line">
+            <span class="arrow">&#8595;</span>
+            <span class="time">{{ low_time }}</span>
+            <span class="height">{{ low_height }}</span>
+          </div>
+          <div class="tide-surf">
+            <span class="surf-wave">
+              {% case low_energy_tier %}
+                {% when 1 %}{{ wave_1 }}
+                {% when 2 %}{{ wave_2 }}
+                {% when 3 %}{{ wave_3 }}
+                {% when 4 %}{{ wave_4 }}
+                {% when 5 %}{{ wave_5 }}
+                {% else %}{{ wave_0 }}
+              {% endcase %}
+            </span>
+            <span class="surf-text">{{ low_swell }}{% if low_energy %} &middot; {{ low_energy }}{% endif %}</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>

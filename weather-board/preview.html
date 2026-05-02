@@ -314,25 +314,48 @@
     .ocean .item .val .energy-bar { display: inline-flex; height: 18px; }
     .ocean .item .val .energy-bar svg { width: 36px; height: 18px; }
     .ocean .item .val .dim { opacity: 0.55; font-weight: 600; font-size: 13px; margin-left: 2px; }
-    .ocean .item .val.tide-val {
-      display: flex;
-      flex-direction: row;
-      gap: 12px;
-      align-items: baseline;
+    .ocean .item.tide-item {
+      flex-direction: column;
       justify-content: center;
+      gap: 6px;
+      padding: 0 6px;
+    }
+    .ocean .tide-block {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+      line-height: 1.1;
+    }
+    .ocean .tide-block .tide-line {
+      display: flex;
+      gap: 4px;
+      align-items: baseline;
       font-size: 15px;
       font-weight: 700;
       letter-spacing: -0.3px;
     }
-    .ocean .item .val.tide-val .tide-group {
-      display: flex;
-      gap: 4px;
-      align-items: baseline;
-    }
-    .ocean .item .val.tide-val .height {
+    .ocean .tide-block .tide-line .height {
       opacity: 0.55;
       font-weight: 600;
       font-size: 12px;
+    }
+    .ocean .tide-block .tide-surf {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+    }
+    .ocean .tide-block .tide-surf .surf-wave {
+      display: inline-flex;
+      width: 24px;
+      height: 12px;
+    }
+    .ocean .tide-block .tide-surf .surf-wave svg {
+      width: 24px;
+      height: 12px;
     }
     .footer {
       border-top: 1px solid #ccc;
@@ -504,12 +527,29 @@
             </div>
           </div>
         </div>
-        <div class="item">
-          <span class="label">Tides</span>
-          <span class="val tide-val">
-            <span class="tide-group"><span class="arrow">&#8593;</span><span class="time">9:29a</span><span class="height">3.8ft</span></span>
-            <span class="tide-group"><span class="arrow">&#8595;</span><span class="time">3:22a</span><span class="height">-0.4ft</span></span>
-          </span>
+        <div class="item tide-item">
+          <div class="tide-block">
+            <div class="tide-line">
+              <span class="arrow">&#8593;</span>
+              <span class="time">9:29a</span>
+              <span class="height">3.8ft</span>
+            </div>
+            <div class="tide-surf">
+              <span class="surf-wave"><svg viewBox="0 0 64 32" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M 0 30 Q 8 20 16 24 Q 24 28 32 22 Q 40 18 48 22 Q 56 26 64 22 L 64 32 L 0 32 Z"/></svg></span>
+              <span class="surf-text">3ft 6s &middot; 41 kJ</span>
+            </div>
+          </div>
+          <div class="tide-block">
+            <div class="tide-line">
+              <span class="arrow">&#8595;</span>
+              <span class="time">3:22a</span>
+              <span class="height">-0.4ft</span>
+            </div>
+            <div class="tide-surf">
+              <span class="surf-wave"><svg viewBox="0 0 64 32" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M 0 30 Q 8 27 16 29 Q 24 31 32 29 Q 40 27 48 29 Q 56 31 64 29 L 64 32 L 0 32 Z"/></svg></span>
+              <span class="surf-text">2ft 5s &middot; 18 kJ</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

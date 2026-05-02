@@ -42,7 +42,7 @@ FORECAST_URL = (
 MARINE_URL = (
     "https://marine-api.open-meteo.com/v1/marine"
     "?latitude={lat}&longitude={lon}"
-    "&hourly=sea_surface_temperature"
+    "&hourly=sea_surface_temperature,swell_wave_height,swell_wave_period"
     "&daily=wave_height_max,wave_period_max,wave_direction_dominant,"
     "swell_wave_height_max,swell_wave_period_max,swell_wave_direction_dominant"
     "&temperature_unit=fahrenheit&length_unit=imperial"
@@ -129,6 +129,25 @@ def fmt_delta(d):
     if not isinstance(d, int):
         return ""
     return "{:+d}°".format(d) if d != 0 else "0°"
+
+
+def swell_energy_at(dt, swell_by_hour):
+    """Returns (swell_str, energy_str, energy_tier_int) for the given datetime,
+    using the closest hourly swell sample. Empty strings + 0 tier if missing.
+    swell_by_hour maps 'YYYY-MM-DDTHH:00' -> (height_ft, period_s)."""
+    if dt is None or not swell_by_hour:
+        return "", "", 0
+    key = dt.strftime("%Y-%m-%dT%H:00")
+    sample = swell_by_hour.get(key)
+    if sample is None:
+        return "", "", 0
+    h_ft, t_s = sample
+    if not isinstance(h_ft, (int, float)) or not isinstance(t_s, (int, float)):
+        return "", "", 0
+    h_m = h_ft * 0.3048
+    kj = round(1.96 * h_m * h_m * t_s * t_s)
+    return ("{}ft {}s".format(round(h_ft), round(t_s)),
+            "{} kJ".format(kj), energy_tier(kj))
 
 
 def aqi_label(aqi):
@@ -409,7 +428,9 @@ def build_payload():
         "ocean_forecast": [],
         "aqi": "--", "aqi_label": "",
         "high_time": "--", "high_height": "",
+        "high_swell": "", "high_energy": "", "high_energy_tier": 0,
         "low_time": "--", "low_height": "",
+        "low_swell": "", "low_energy": "", "low_energy_tier": 0,
         "today_curve_points": "", "today_hi": "--", "today_hi_time": "--",
         "today_now_x": 0, "today_now_y": 0,
         "today_tides": [],
@@ -502,6 +523,7 @@ def build_payload():
 
     om_now_sst = None  # OM's prediction for the current hour — for calibration
     sst_by_hour = {}
+    swell_by_hour = {}  # 'YYYY-MM-DDTHH:00' -> (height_ft, period_s)
     if marine:
         m_daily = marine.get("daily", {})
         m_hourly = marine.get("hourly", {})
@@ -517,6 +539,13 @@ def build_payload():
             d = ts.split("T")[0]
             if d not in sst_by_day or t > sst_by_day[d]:
                 sst_by_day[d] = t
+
+        for ts, h, t_s in zip(m_hourly.get("time", []),
+                               m_hourly.get("swell_wave_height", []),
+                               m_hourly.get("swell_wave_period", [])):
+            if h is None or t_s is None or "T" not in ts:
+                continue
+            swell_by_hour[ts] = (h, t_s)
 
         now_hour_key = now.strftime("%Y-%m-%dT%H:00")
         om_now_sst = sst_by_hour.get(now_hour_key)
@@ -634,9 +663,13 @@ def build_payload():
         if next_high:
             p["high_time"] = fmt_time(next_high[0].isoformat())
             p["high_height"] = "{:.1f}ft".format(next_high[1])
+            p["high_swell"], p["high_energy"], p["high_energy_tier"] = \
+                swell_energy_at(next_high[0], swell_by_hour)
         if next_low:
             p["low_time"] = fmt_time(next_low[0].isoformat())
             p["low_height"] = "{:.1f}ft".format(next_low[1])
+            p["low_swell"], p["low_energy"], p["low_energy_tier"] = \
+                swell_energy_at(next_low[0], swell_by_hour)
         p["today_tides"] = today_tides
 
     return {"merge_variables": p}
