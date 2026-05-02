@@ -160,21 +160,6 @@ def swell_energy_at(dt, swell_by_hour):
             "{} kJ".format(kj), energy_tier(kj))
 
 
-def aqi_label(aqi):
-    """US AQI category."""
-    if aqi <= 50:
-        return "Good"
-    if aqi <= 100:
-        return "Moderate"
-    if aqi <= 150:
-        return "Unhealthy*"
-    if aqi <= 200:
-        return "Unhealthy"
-    if aqi <= 300:
-        return "V. Unhealthy"
-    return "Hazardous"
-
-
 def tide_url():
     """NOAA CO-OPS predictions URL covering today + tomorrow."""
     today = datetime.now()
@@ -636,9 +621,9 @@ def build_payload():
         "delta": "", "tdelta": "", "feels": "--",
         "wind": "--", "humid": "--", "uv": "--", "rain": "--",
         "rise": "--", "set": "--", "forecast": [],
-        "ocean": "--", "swell": "--", "energy": "--", "energy_tier": 0,
+        "ocean": "--",
         "ocean_forecast": [],
-        "aqi": "--", "aqi_label": "",
+        "aqi": "--",
         "tide1_arrow": "", "tide1_time": "--", "tide1_height": "",
         "tide1_swell": "", "tide1_energy": "", "tide1_energy_tier": 0,
         "tide2_arrow": "", "tide2_time": "--", "tide2_height": "",
@@ -772,23 +757,6 @@ def build_payload():
         if om_today_sst is not None:
             p["ocean"] = round(om_today_sst)
 
-        swell_h = (m_daily.get("swell_wave_height_max") or [None])[0]
-        swell_t = (m_daily.get("swell_wave_period_max") or [None])[0]
-        swell_d = (m_daily.get("swell_wave_direction_dominant") or [None])[0]
-
-        if isinstance(swell_h, (int, float)) and isinstance(swell_t, (int, float)):
-            p["swell"] = "{}ft @ {}s {}".format(
-                round(swell_h), round(swell_t), cardinal(swell_d)
-            ).strip()
-            # Wave energy: rho*g^2/(16*pi) * H^2 * T^2 (kJ)
-            # Calibrated against surf-forecast.com ranges:
-            # 100 kJ surfable, 200-1000 punchy, 1000-5000 heavy.
-            # H in meters, T in seconds.
-            h_m = swell_h * 0.3048
-            kj = round(1.96 * h_m * h_m * swell_t * swell_t)
-            p["energy"] = "{} kJ".format(kj)
-            p["energy_tier"] = energy_tier(kj)
-
         m_time = m_daily.get("time", [])
         sh_arr = m_daily.get("swell_wave_height_max", [])
         st_arr = m_daily.get("swell_wave_period_max", [])
@@ -845,7 +813,6 @@ def build_payload():
         us_aqi = aqi_data.get("current", {}).get("us_aqi")
         if isinstance(us_aqi, (int, float)):
             p["aqi"] = round(us_aqi)
-            p["aqi_label"] = aqi_label(us_aqi)
 
     tide_data = fetch_json(tide_url(), "Tides")
     if tide_data:
@@ -940,9 +907,8 @@ def main():
     while True:
         payload = build_payload()
         mv = payload["merge_variables"]
-        log.info("Today: %s°/%s° %s | Ocean %s°F | Swell %s | %s",
-                 mv.get("hi"), mv.get("lo"), mv.get("phrase"),
-                 mv.get("ocean"), mv.get("swell"), mv.get("energy"))
+        log.info("Today: %s°/%s° %s | Ocean %s°F",
+                 mv.get("hi"), mv.get("lo"), mv.get("phrase"), mv.get("ocean"))
         if mv.get("has_launch"):
             log.info("Launch today: %s %s @ %s",
                      mv.get("launch_what"), mv.get("launch_where"),
