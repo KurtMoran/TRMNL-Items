@@ -209,23 +209,60 @@ def day_label(iso_date):
         return "---"
 
 
-def fetch_json(url, name):
+# ============= Per-cycle structured logging =============
+
+_cycle_stats = {"ok": 0, "fail": 0, "started_at": None}
+
+
+def _cycle_start():
+    _cycle_stats["ok"] = 0
+    _cycle_stats["fail"] = 0
+    _cycle_stats["started_at"] = time.monotonic()
+    log.info("─── %s • cycle start ───",
+             datetime.now().strftime("%-I:%M:%S %p"))
+
+
+def _cycle_end():
+    started = _cycle_stats["started_at"] or time.monotonic()
+    elapsed = time.monotonic() - started
+    n = _cycle_stats["ok"] + _cycle_stats["fail"]
+    status = "ok" if _cycle_stats["fail"] == 0 else "WITH FAILURES"
+    log.info("─── cycle %s • %d/%d ops • %.2fs ───",
+             status, _cycle_stats["ok"], n, elapsed)
+
+
+def _step_req(label, detail=""):
+    log.info("→ %s%s", label, " — " + detail if detail else "")
+
+
+def _step_ok(msg):
+    _cycle_stats["ok"] += 1
+    log.info("  ✓ %s", msg)
+
+
+def _step_fail(msg):
+    _cycle_stats["fail"] += 1
+    log.info("  ✗ %s", msg)
+
+
+def fetch_json(url):
+    """Returns (data, error_str). error_str is None on success."""
     try:
         resp = requests.get(url, timeout=15)
         resp.raise_for_status()
-        return resp.json()
+        return resp.json(), None
     except Exception as e:
-        log.error("%s fetch failed: %s", name, e)
-        return None
+        return None, str(e)
 
 
 def fetch_ndbc():
-    """Returns (current_wtmp_F_or_None, hourly_today: dict {hour_int: temp_F_float}).
+    """Returns (current_wtmp_F_or_None, hourly_today: dict, error_str_or_None).
     Hourly values are kept as floats (~0.18°F precision) so the curve renders smoothly.
     NDBC realtime2 reports UTC; we convert to local time for the today-curve.
     """
     hourly_today = {}
     current = None
+    error = None
     try:
         resp = requests.get(NDBC_URL, timeout=15)
         resp.raise_for_status()
@@ -255,8 +292,8 @@ def fetch_ndbc():
             except (ValueError, IndexError):
                 continue
     except Exception as e:
-        log.error("NDBC %s fetch failed: %s", NDBC_STATION, e)
-    return current, hourly_today
+        error = str(e)
+    return current, hourly_today, error
 
 
 def fetch_ndbc_wtmp():
@@ -400,8 +437,8 @@ def fetch_launches_smart(now):
     )
     if cache_fresh:
         age = int((now - fetched_at).total_seconds())
-        log.info("Launches: using cache (%ds old, %d entries)",
-                 age, len(cache.get("launches", [])))
+        log.debug("Launches: using cache (%ds old, %d entries)",
+                  age, len(cache.get("launches", [])))
         return cache.get("launches", [])
 
     # Pad the UTC window by ±1 day so launches near local midnight aren't missed
@@ -607,9 +644,8 @@ def build_today_curve(now, ndbc_hourly, om_hourly, delta, sunrise_x=None, sunset
 
 
 def build_payload():
-    forecast = fetch_json(FORECAST_URL, "Forecast")
-    marine = fetch_json(MARINE_URL, "Marine")
     now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
 
     p = {
         "loc": LOCATION_NAME,
@@ -637,10 +673,25 @@ def build_payload():
         "launch_time_str": "", "launch_what": "", "launch_where": "",
     }
 
+    # ===== Launches =====
+    _step_req("Launches", "{} (cache or LL2 fetch)".format(LAUNCH_LOCATION_LABEL))
     launches_today = fetch_launches_smart(now)
     p.update(build_launch_fields(now, launches_today))
+    if p["has_launch"]:
+        _step_ok("today: {} {} @ {}".format(
+            p["launch_what"], p["launch_where"], p["launch_time_str"]))
+    else:
+        _step_ok("none today ({} entries returned)".format(len(launches_today)))
 
-    if forecast:
+    # ===== Open-Meteo Forecast =====
+    _step_req("Open-Meteo Forecast",
+              "{} ({:.3f},{:.3f}) past 1d + 4d hourly+daily".format(
+                  LOCATION_NAME, WEATHER_LAT, WEATHER_LON))
+    forecast, err = fetch_json(FORECAST_URL)
+    today_hi = None
+    if not forecast:
+        _step_fail("HTTP failed: {}".format(err or "no data"))
+    else:
         daily = forecast.get("daily", {})
         current = forecast.get("current", {})
         time_arr = daily.get("time", [])
@@ -665,13 +716,13 @@ def build_payload():
             p["phrase"] = wmo_to_phrase(today_code)
 
             if isinstance(yest_hi, (int, float)) and isinstance(today_hi, (int, float)):
-                delta = round(today_hi) - round(yest_hi)
-                if abs(delta) <= SAME_THRESHOLD:
+                delta_y = round(today_hi) - round(yest_hi)
+                if abs(delta_y) <= SAME_THRESHOLD:
                     p["delta"] = "Same as yesterday"
-                elif delta > 0:
-                    p["delta"] = "{}° warmer than yesterday".format(delta)
+                elif delta_y > 0:
+                    p["delta"] = "{}° warmer than yesterday".format(delta_y)
                 else:
-                    p["delta"] = "{}° cooler than yesterday".format(abs(delta))
+                    p["delta"] = "{}° cooler than yesterday".format(abs(delta_y))
 
             if len(temp_max) >= 3 and isinstance(temp_max[2], (int, float)) and isinstance(today_hi, (int, float)):
                 tdelta = round(temp_max[2]) - round(today_hi)
@@ -722,10 +773,21 @@ def build_payload():
                 })
         p["forecast"] = forecast_days
 
+        _step_ok("{}°/{}° {}, feels {}°, wind {}, rise {} set {}, {}d forecast".format(
+            p["hi"], p["lo"], p["phrase"], p["feels"],
+            p["wind"], p["rise"], p["set"], len(forecast_days)))
+
+    # ===== Open-Meteo Marine =====
+    _step_req("Open-Meteo Marine",
+              "{} ({:.3f},{:.3f}) SST + swell, 4d daily".format(
+                  OCEAN_NAME, OCEAN_LAT, OCEAN_LON))
+    marine, err = fetch_json(MARINE_URL)
     om_now_sst = None  # OM's prediction for the current hour — for calibration
     sst_by_hour = {}
     swell_by_hour = {}  # 'YYYY-MM-DDTHH:00' -> (height_ft, period_s)
-    if marine:
+    if not marine:
+        _step_fail("HTTP failed: {}".format(err or "no data"))
+    else:
         m_daily = marine.get("daily", {})
         m_hourly = marine.get("hourly", {})
 
@@ -751,7 +813,6 @@ def build_payload():
         now_hour_key = now.strftime("%Y-%m-%dT%H:00")
         om_now_sst = sst_by_hour.get(now_hour_key)
 
-        today_str = now.strftime("%Y-%m-%d")
         om_today_sst = sst_by_day.get(today_str)
         if om_today_sst is not None:
             p["ocean"] = round(om_today_sst)
@@ -778,27 +839,40 @@ def build_payload():
                     })
         p["ocean_forecast"] = ocean_fc
 
-    # Prefer the NDBC sensor reading at Scripps Pier over Open-Meteo's modeled SST.
-    # Also calibrate the forecast: Open-Meteo's offshore-modeled SST runs ~2-4°F warm
-    # vs the nearshore buoy in summer/fall (upwelling). The bias is the median of
-    # today's hourly (NDBC - OM) pairs — a single-point delta would get poisoned by
-    # internal-bore spikes at Scripps Pier (5-7°F drops that recover within an hour).
-    ndbc_wtmp, ndbc_today_hourly = fetch_ndbc()
-    delta = 0
-    if ndbc_wtmp is not None:
-        p["ocean"] = ndbc_wtmp
-        if om_now_sst is not None:
-            delta, n_pairs = compute_calibration_delta(
-                ndbc_today_hourly, sst_by_hour, today_str,
-                fallback_ndbc=ndbc_wtmp, fallback_om=om_now_sst,
-            )
-            log.info("SST calibration delta=%+.2f°F (n=%d paired hours)",
-                     delta, n_pairs)
-            for day in p["ocean_forecast"]:
-                if isinstance(day.get("ocean"), (int, float)):
-                    day["ocean"] = round(day["ocean"] + delta)
+        _step_ok("{} hourly SST, {} hourly swell, {}-day ocean forecast".format(
+            len(sst_by_hour), len(swell_by_hour), len(ocean_fc)))
 
-    # Today's water-temp curve: NDBC actuals for past hours, calibrated OM for future.
+    # ===== NDBC buoy =====
+    # Prefer NDBC's nearshore reading over OM's offshore-modeled SST. Also calibrate
+    # the forecast: OM runs ~2-4°F warm vs the buoy in summer/fall (upwelling). Bias
+    # is the median of today's hourly (NDBC - OM) pairs — a single-point delta would
+    # get poisoned by internal-bore spikes at Scripps Pier (5-7°F drops that recover
+    # within an hour).
+    _step_req("NDBC {} buoy".format(NDBC_STATION), "Scripps Pier real-time SST")
+    ndbc_wtmp, ndbc_today_hourly, ndbc_err = fetch_ndbc()
+    if ndbc_wtmp is None:
+        _step_fail("no current reading: {}".format(ndbc_err or "data missing"))
+    else:
+        p["ocean"] = ndbc_wtmp
+        _step_ok("now={}°F, {} hourly samples today".format(
+            ndbc_wtmp, len(ndbc_today_hourly)))
+
+    # ===== SST calibration =====
+    delta = 0
+    if ndbc_wtmp is not None and om_now_sst is not None:
+        _step_req("SST calibration", "NDBC vs Open-Meteo (median bias)")
+        delta, n_pairs = compute_calibration_delta(
+            ndbc_today_hourly, sst_by_hour, today_str,
+            fallback_ndbc=ndbc_wtmp, fallback_om=om_now_sst,
+        )
+        for day in p["ocean_forecast"]:
+            if isinstance(day.get("ocean"), (int, float)):
+                day["ocean"] = round(day["ocean"] + delta)
+        _step_ok("delta={:+.2f}°F applied to forecast (n={} paired hours)".format(
+            delta, n_pairs))
+
+    # ===== Today's water-temp curve =====
+    _step_req("Build today's water-temp curve", "NDBC actual + calibrated OM")
     today_curve = build_today_curve(
         now, ndbc_today_hourly, sst_by_hour, delta,
         sunrise_x=p.get("sunrise_x"), sunset_x=p.get("sunset_x"),
@@ -806,15 +880,30 @@ def build_payload():
     )
     if today_curve:
         p.update(today_curve)
+        _step_ok("hi={}°F @ {}, dot at x={} y={}".format(
+            p["today_hi"], p["today_hi_time"], p["today_now_x"], p["today_now_y"]))
+    else:
+        _step_fail("no curve data (Marine + NDBC both empty)")
 
-    aqi_data = fetch_json(AIR_QUALITY_URL, "AirQuality")
-    if aqi_data:
+    # ===== Air Quality =====
+    _step_req("Open-Meteo Air Quality", "current US AQI")
+    aqi_data, err = fetch_json(AIR_QUALITY_URL)
+    if not aqi_data:
+        _step_fail("HTTP failed: {}".format(err or "no data"))
+    else:
         us_aqi = aqi_data.get("current", {}).get("us_aqi")
         if isinstance(us_aqi, (int, float)):
             p["aqi"] = round(us_aqi)
+            _step_ok("AQI {}".format(p["aqi"]))
+        else:
+            _step_fail("us_aqi missing in response")
 
-    tide_data = fetch_json(tide_url(), "Tides")
-    if tide_data:
+    # ===== NOAA Tides =====
+    _step_req("NOAA Tides", "station {} (48h predictions)".format(TIDE_STATION_ID))
+    tide_data, err = fetch_json(tide_url())
+    if not tide_data:
+        _step_fail("HTTP failed: {}".format(err or "no data"))
+    else:
         next_high = None
         next_low = None
         today_date = now.date()
@@ -863,33 +952,46 @@ def build_payload():
             p["{}_energy_tier".format(slot)] = tier
         p["today_tides"] = today_tides
 
+        ev_strs = ["{}{} {:.1f}ft".format(arrow, fmt_time(t_dt.isoformat()), height)
+                   for arrow, t_dt, height in events]
+        if ev_strs:
+            _step_ok("next {} • {} markers today".format(
+                " / ".join(ev_strs), len(today_tides)))
+        else:
+            _step_ok("no upcoming events • {} markers today".format(
+                len(today_tides)))
+
     return {"merge_variables": p}
 
 
 def push_to_trmnl(payload):
     if not TRMNL_WEBHOOK_UUID:
-        log.info("No TRMNL webhook configured, skipping push")
+        _step_req("TRMNL webhook")
+        _step_ok("skipped (no webhook configured)")
         return
+    _step_req("TRMNL webhook", "POST merge_variables")
     url = "{}/{}".format(TRMNL_API_URL, TRMNL_WEBHOOK_UUID)
     try:
         resp = requests.post(url, json=payload, timeout=15)
         if resp.status_code == 200:
-            log.info("TRMNL updated successfully")
+            _step_ok("200 OK")
         elif resp.status_code == 429:
-            log.warning("TRMNL rate limited, will retry next cycle")
+            _step_fail("429 rate limited (will retry next cycle)")
         else:
-            log.warning("TRMNL push returned %d: %s", resp.status_code, resp.text)
+            _step_fail("{}: {}".format(resp.status_code, resp.text[:80]))
     except Exception as e:
-        log.error("TRMNL push failed: %s", e)
+        _step_fail("POST failed: {}".format(e))
 
 
 def save_state(payload):
+    _step_req("Save state", DATA_FILE)
     try:
         os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
         with open(DATA_FILE, "w") as f:
             json.dump(payload, f)
+        _step_ok("written")
     except Exception as e:
-        log.warning("Could not save state: %s", e)
+        _step_fail("write failed: {}".format(e))
 
 
 def main():
@@ -904,16 +1006,11 @@ def main():
     threading.Thread(target=launch_refresh_loop, daemon=True,
                      name="launch-refresh").start()
     while True:
+        _cycle_start()
         payload = build_payload()
-        mv = payload["merge_variables"]
-        log.info("Today: %s°/%s° %s | Ocean %s°F",
-                 mv.get("hi"), mv.get("lo"), mv.get("phrase"), mv.get("ocean"))
-        if mv.get("has_launch"):
-            log.info("Launch today: %s %s @ %s",
-                     mv.get("launch_what"), mv.get("launch_where"),
-                     mv.get("launch_time_str"))
         push_to_trmnl(payload)
         save_state(payload)
+        _cycle_end()
         time.sleep(POLL_INTERVAL_SEC)
 
 
