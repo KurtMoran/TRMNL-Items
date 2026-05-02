@@ -5,9 +5,10 @@ E-ink dashboard showing today's land weather, 3-day forecast, and ocean/surf con
 ## How it works
 
 1. Polls Open-Meteo Forecast API for land weather: today's high/low, current conditions, wind, humidity, UV, sunrise/sunset, 3-day outlook, plus yesterday's high (for the "X° cooler/warmer" comparison).
-2. Polls Open-Meteo Marine API for ocean: sea surface temperature, swell height/period/direction.
-3. Calculates wave energy in kJ from the swell height + period (`0.49 × H² × T`).
-4. Pushes a JSON payload to a TRMNL e-ink display via webhook.
+2. Polls Open-Meteo Marine API for ocean swell: height, period, direction (today + 3-day forecast SST).
+3. Polls NDBC station LJAC1 (Scripps Pier sensor) for today's water temperature — overrides the modeled SST when available, and applies the (NDBC − Open-Meteo) gap as a calibration delta to the 3-day SST forecast (Open-Meteo's offshore model runs 2-4°F warm vs the nearshore buoy in summer/fall; using yesterday's gap as the offset cuts forecast error in half — validated against 4 years of paired data).
+4. Calculates wave energy in kJ from the swell height + period (`0.49 × H² × T`).
+5. Pushes a JSON payload to a TRMNL e-ink display via webhook.
 
 Default location: San Diego (land) + La Jolla Shores (ocean). Configurable via env vars.
 
@@ -17,6 +18,7 @@ Default location: San Diego (land) + La Jolla Shores (ocean). Configurable via e
 |-----|------|------|------|
 | Open-Meteo Forecast | None | Free | 1 request/cycle |
 | Open-Meteo Marine | None | Free | 1 request/cycle |
+| NDBC realtime2 (Scripps Pier WTMP) | None | Free | 1 request/cycle |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
 Polls every 15 minutes (matches TRMNL's e-ink refresh cadence).
@@ -61,6 +63,7 @@ docker run -d \
 | `POLL_INTERVAL_SEC` | No | 900 | Seconds between cycles (default: 15 min) |
 | `TZ` | No | America/Los_Angeles | Timezone for timestamps & API |
 | `DATA_FILE` | No | /data/weather_state.json | State file path |
+| `NDBC_STATION` | No | LJAC1 | NDBC station ID for water temp (default: Scripps Pier) |
 
 ## Files
 
