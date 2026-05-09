@@ -6,9 +6,10 @@ E-ink dashboard showing today's land weather, 3-day forecast, and ocean/surf con
 
 1. Polls Open-Meteo Forecast API for land weather: today's high/low, current conditions, wind, humidity, UV, sunrise/sunset, 3-day outlook, plus yesterday's high (for the "X° cooler/warmer" comparison).
 2. Polls Open-Meteo Marine API for ocean swell: height, period, direction (today + 3-day forecast SST).
-3. Polls NDBC station LJAC1 (Scripps Pier sensor) for today's water temperature — overrides the modeled SST when available, and applies the (NDBC − Open-Meteo) gap as a calibration delta to the 3-day SST forecast (Open-Meteo's offshore model runs 2-4°F warm vs the nearshore buoy in summer/fall; using yesterday's gap as the offset cuts forecast error in half — validated against 4 years of paired data).
-4. Calculates wave energy in kJ from the swell height + period (`0.49 × H² × T`).
-5. Pushes a JSON payload to a TRMNL e-ink display via webhook.
+3. Polls **NOAA CO-OPS station 9410230** (Scripps Pier, 6-min cadence) and **NDBC station LJAC1** (same pier, intermittent) for today's water temperature. The two pier sensors are merged into one hourly observation series; NOAA's freshest sample drives the displayed "now" value. Today's water-temp curve plots **real merged observations for past hours** and **calibrated Open-Meteo forecast for future hours**, so the dot you see for "now" sits on a measured reading rather than a model output.
+4. Calibrates the 3-day SST forecast: Open-Meteo's offshore model runs ~2-4°F warm vs nearshore observations in summer/fall (upwelling). Bias = median of today's hourly (real - OM) pairs, robust against internal-bore transients at the pier.
+5. Calculates wave energy in kJ from the swell height + period (`0.49 × H² × T`).
+6. Pushes a JSON payload to a TRMNL e-ink display via webhook.
 
 Default location: San Diego (land) + La Jolla Shores (ocean). Configurable via env vars.
 
@@ -18,7 +19,8 @@ Default location: San Diego (land) + La Jolla Shores (ocean). Configurable via e
 |-----|------|------|------|
 | Open-Meteo Forecast | None | Free | 1 request/cycle |
 | Open-Meteo Marine | None | Free | 1 request/cycle |
-| NDBC realtime2 (Scripps Pier WTMP) | None | Free | 1 request/cycle |
+| NOAA CO-OPS (Scripps Pier water_temperature, 6-min) | None | Free | 1 request/cycle |
+| NDBC realtime2 (Scripps Pier WTMP, secondary) | None | Free | 1 request/cycle |
 | Launch Library 2 (Vandenberg launches) | None (optional token) | Free | ~7.5 requests/hour (~50% of free tier) |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
@@ -70,7 +72,8 @@ docker run -d \
 | `POLL_INTERVAL_SEC` | No | 900 | Seconds between cycles (default: 15 min) |
 | `TZ` | No | America/Los_Angeles | Timezone for timestamps & API |
 | `DATA_FILE` | No | /data/weather_state.json | State file path |
-| `NDBC_STATION` | No | LJAC1 | NDBC station ID for water temp (default: Scripps Pier) |
+| `NDBC_STATION` | No | LJAC1 | NDBC station ID for secondary water-temp feed (default: Scripps Pier) |
+| `NOAA_WTEMP_STATION` | No | (same as `TIDE_STATION_ID`) | NOAA CO-OPS station ID for primary 6-min water-temp feed |
 | `LAUNCH_REFRESH_SEC` | No | 480 | Seconds between Launch Library 2 fetches (default 8min = ~7.5/hour, ~50% of free tier) |
 | `LL2_LOCATION_IDS` | No | 11 | Comma-separated LL2 location IDs (11 = Vandenberg SFB) |
 | `LL2_API_KEY` | No | — | Optional LL2 token; lifts the free-tier rate limit |

@@ -25,6 +25,11 @@ TRMNL_WEBHOOK_UUID = os.getenv("TRMNL_WEBHOOK_UUID", "")
 TRMNL_API_URL = "https://trmnl.com/api/custom_plugins"
 DATA_FILE = os.getenv("DATA_FILE", "/data/weather_state.json")
 TIDE_STATION_ID = os.getenv("TIDE_STATION_ID", "9410230")  # NOAA La Jolla (Scripps Pier)
+# NOAA CO-OPS water temperature is reported every 6 min — the same Scripps Pier
+# station as the tide reference. This is the freshest real-time water-temp feed
+# available for La Jolla nearshore. NDBC LJAC1 below is the same pier but reports
+# WTMP intermittently (~30 min, with gaps); we keep it as a redundant secondary.
+NOAA_WTEMP_STATION = os.getenv("NOAA_WTEMP_STATION", TIDE_STATION_ID)
 NDBC_STATION = os.getenv("NDBC_STATION", "LJAC1")  # NDBC Scripps Pier sensor (water temp)
 NDBC_URL = "https://www.ndbc.noaa.gov/data/realtime2/{}.txt".format(NDBC_STATION)
 
@@ -311,6 +316,74 @@ def fetch_ndbc_wtmp():
     return fetch_ndbc()[0]
 
 
+def noaa_water_temp_url():
+    """NOAA CO-OPS water_temperature query for the configured pier station."""
+    return (
+        "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+        "?product=water_temperature"
+        "&application=trmnl-weather"
+        "&date=today"
+        "&station={station}"
+        "&time_zone=lst_ldt"
+        "&units=english"
+        "&format=json"
+    ).format(station=NOAA_WTEMP_STATION)
+
+
+def fetch_noaa_water_temp():
+    """Returns (current_F_or_None, hourly_today: dict[int -> float], error_str_or_None).
+
+    NOAA CO-OPS reports water temperature every 6 min in local time, so the latest
+    sample is typically <10 min old. Hourly buckets average all 6-min samples
+    within each clock hour — preserves diurnal warming/cooling while smoothing
+    sensor jitter and the brief internal-bore spikes that affect Scripps Pier.
+    """
+    try:
+        resp = requests.get(noaa_water_temp_url(), timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return None, {}, str(e)
+
+    if isinstance(data, dict) and "error" in data:
+        return None, {}, data["error"].get("message", "NOAA error")
+
+    hour_buckets = {}
+    current = None
+    for d in (data.get("data") or []):
+        try:
+            temp_f = float(d.get("v"))
+        except (TypeError, ValueError):
+            continue
+        if temp_f < 40 or temp_f > 90:  # plausible CA nearshore range
+            continue
+        try:
+            ts = datetime.strptime(d.get("t", ""), "%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
+        hour_buckets.setdefault(ts.hour, []).append(temp_f)
+        current = temp_f  # samples are chronological → last valid is freshest
+
+    hourly = {h: sum(vs) / len(vs) for h, vs in hour_buckets.items()}
+    return current, hourly, None
+
+
+def merge_hourly_obs(*sources):
+    """Average two or more hourly-observation dicts hour-by-hour. Both NOAA CO-OPS
+    and NDBC LJAC1 measure at Scripps Pier, so when both report a value for the
+    same hour the average is more robust than either alone."""
+    out = {}
+    all_hours = set()
+    for s in sources:
+        if s:
+            all_hours.update(s)
+    for h in all_hours:
+        vals = [s[h] for s in sources if s and h in s]
+        if vals:
+            out[h] = sum(vals) / len(vals)
+    return out
+
+
 def safe_round(v):
     return round(v) if isinstance(v, (int, float)) else "--"
 
@@ -588,45 +661,78 @@ def build_launch_fields(now, launches):
     return fields
 
 
-def compute_calibration_delta(ndbc_today_hourly, sst_by_hour, today_str,
-                               fallback_ndbc, fallback_om):
-    """Median of today's hourly (NDBC - OM) pairs, in °F.
+def compute_calibration_delta(real_today_hourly, sst_by_hour, today_str,
+                               fallback_real, fallback_om):
+    """Median of today's hourly (real observation - OM forecast) pairs, in °F.
 
-    Pairs each NDBC hourly sample with OM's modeled SST for the same wall-clock
-    hour and returns the median difference. Robust to single-hour outliers from
-    internal-bore events at Scripps Pier (5-7°F transients that recover within
-    an hour). Falls back to the single-point delta if fewer than 3 pairs.
+    `real_today_hourly` is the merged NOAA CO-OPS + NDBC hourly series. NOAA
+    contributes a near-continuous 24-hour bucket set so the median typically has
+    20+ pairs by mid-day, making the bias estimate robust against single-hour
+    outliers (internal-bore drops at Scripps Pier, sensor jitter). Falls back to
+    the single-point delta if fewer than 3 pairs are available.
 
     Returns (delta_F, n_pairs).
     """
     diffs = []
-    for hour_int, ndbc_f in ndbc_today_hourly.items():
+    for hour_int, real_f in real_today_hourly.items():
         om_f = sst_by_hour.get("{}T{:02d}:00".format(today_str, hour_int))
         if om_f is None:
             continue
-        diffs.append(ndbc_f - om_f)
+        diffs.append(real_f - om_f)
     if len(diffs) >= 3:
         diffs.sort()
         n = len(diffs)
         median = diffs[n // 2] if n % 2 == 1 else (diffs[n // 2 - 1] + diffs[n // 2]) / 2
         return median, n
-    if fallback_ndbc is not None and fallback_om is not None:
-        return fallback_ndbc - fallback_om, len(diffs)
+    if fallback_real is not None and fallback_om is not None:
+        return fallback_real - fallback_om, len(diffs)
     return 0, len(diffs)
 
 
-def build_today_curve(now, ndbc_hourly, om_hourly, delta, sunrise_x=None, sunset_x=None,
+CURVE_FORECAST_FADE_HOURS = 6  # how long the anchor offset takes to decay to 0
+
+
+def build_today_curve(now, real_hourly, om_hourly, delta, sunrise_x=None, sunset_x=None,
                        launch_x=None):
-    """Calibrated OM forecast across the full 24-hour day. NDBC samples are
-    still used upstream to compute `delta`, but the curve itself stays smooth
-    by avoiding the spikey raw sensor values. Returns dict of payload fields,
-    or {} if no data."""
+    """Hybrid water-temp curve: real observations (NOAA CO-OPS + NDBC, averaged
+    per hour) for past/current hours, calibrated OM forecast for future hours.
+
+    The day-wide median bias (`delta`) corrects OM's seasonal offset but doesn't
+    guarantee the forecast hour exactly matches the latest real reading — there
+    can still be a few-degree step at the boundary. To eliminate that visible
+    gap, future hours get an additional *local* anchor offset that pins the
+    forecast to the most recent observation and decays linearly to zero over
+    `CURVE_FORECAST_FADE_HOURS`. Beyond the fade window the curve is purely
+    the calibrated forecast.
+
+    Past hours without observations fall through to the calibrated forecast so
+    the curve stays continuous. Returns dict of payload fields, or {} if no
+    data."""
     today_str = now.strftime("%Y-%m-%d")
+    cur_hour = now.hour
+
+    # Anchor: residual gap between latest real obs and calibrated OM at that hour.
+    recent_obs_hours = sorted(h for h in real_hourly if h <= cur_hour)
+    anchor_hour = recent_obs_hours[-1] if recent_obs_hours else None
+    anchor_offset = 0.0
+    if anchor_hour is not None:
+        om_at_anchor = om_hourly.get("{}T{:02d}:00".format(today_str, anchor_hour))
+        if om_at_anchor is not None:
+            anchor_offset = real_hourly[anchor_hour] - (om_at_anchor + delta)
+
     series = {}
     for k in range(24):
+        if k <= cur_hour and k in real_hourly:
+            series[k] = real_hourly[k]  # past/current — anchor in measured data
+            continue
         om = om_hourly.get("{}T{:02d}:00".format(today_str, k))
-        if om is not None:
-            series[k] = om + delta  # float, no rounding
+        if om is None:
+            continue
+        if anchor_hour is not None and k > anchor_hour:
+            decay = max(0.0, 1 - (k - anchor_hour) / CURVE_FORECAST_FADE_HOURS)
+            series[k] = om + delta + anchor_offset * decay
+        else:
+            series[k] = om + delta  # gap before the anchor — calibrated only
     if not series:
         return {}
     points, nx, ny, hi_t, hi_h = _curve_geometry(series, now, WATER_CURVE_W, WATER_CURVE_H, pad=4)
@@ -858,29 +964,54 @@ def build_payload():
         _step_ok("{} hourly SST, {} hourly swell, {}-day ocean forecast".format(
             len(sst_by_hour), len(swell_by_hour), len(ocean_fc)))
 
-    # ===== NDBC buoy =====
-    # Prefer NDBC's nearshore reading over OM's offshore-modeled SST. Also calibrate
-    # the forecast: OM runs ~2-4°F warm vs the buoy in summer/fall (upwelling). Bias
-    # is the median of today's hourly (NDBC - OM) pairs — a single-point delta would
-    # get poisoned by internal-bore spikes at Scripps Pier (5-7°F drops that recover
-    # within an hour).
+    # ===== NOAA CO-OPS water temp (primary nearshore observation) =====
+    # 6-min cadence at Scripps Pier — the same pier as NDBC LJAC1 but a more
+    # reliable real-time feed (NDBC's WTMP column has frequent gaps). This is
+    # the source we trust most for "what the water actually is right now" at
+    # La Jolla.
+    _step_req("NOAA CO-OPS {} water temp".format(NOAA_WTEMP_STATION),
+              "GET {} — Scripps Pier 6-min observations".format(
+                  _short_url(noaa_water_temp_url())))
+    noaa_wtmp, noaa_today_hourly, noaa_err = fetch_noaa_water_temp()
+    if noaa_wtmp is None:
+        _step_fail("no current reading: {}".format(noaa_err or "data missing"))
+    else:
+        _step_ok("now={:.1f}°F, {} hourly buckets today".format(
+            noaa_wtmp, len(noaa_today_hourly)))
+
+    # ===== NDBC buoy (secondary / cross-check) =====
+    # Same Scripps Pier location as NOAA above, kept for redundancy and to
+    # cross-check the bias calibration with a second sensor stream. WTMP is
+    # intermittent — NOAA covers most hours on its own.
     _step_req("NDBC {} buoy".format(NDBC_STATION),
-              "GET {} — Scripps Pier real-time SST".format(_short_url(NDBC_URL)))
+              "GET {} — Scripps Pier secondary feed".format(_short_url(NDBC_URL)))
     ndbc_wtmp, ndbc_today_hourly, ndbc_err = fetch_ndbc()
     if ndbc_wtmp is None:
         _step_fail("no current reading: {}".format(ndbc_err or "data missing"))
     else:
-        p["ocean"] = ndbc_wtmp
         _step_ok("now={}°F, {} hourly samples today".format(
             ndbc_wtmp, len(ndbc_today_hourly)))
 
+    # Merge the two pier sensors into a single hourly observation series. Either
+    # one alone falls through cleanly. Prefer NOAA's freshest sample for "now"
+    # since it updates every 6 min vs NDBC's ~30-min cadence.
+    real_today_hourly = merge_hourly_obs(noaa_today_hourly, ndbc_today_hourly)
+    real_now = noaa_wtmp if noaa_wtmp is not None else ndbc_wtmp
+    if real_now is not None:
+        p["ocean"] = round(real_now)
+
     # ===== SST calibration =====
+    # OM Marine's modeled SST runs ~2-4°F warm vs nearshore observations in
+    # summer/fall (upwelling). Bias = median of today's hourly (real - OM)
+    # pairs. The median is robust to internal-bore transients at the pier
+    # (5-7°F drops that recover within an hour) and to occasional sensor jitter.
     delta = 0
-    if ndbc_wtmp is not None and om_now_sst is not None:
-        _step_req("SST calibration", "local computation — NDBC vs Open-Meteo (median bias)")
+    if real_now is not None and om_now_sst is not None:
+        _step_req("SST calibration",
+                  "local computation — merged pier obs vs Open-Meteo (median bias)")
         delta, n_pairs = compute_calibration_delta(
-            ndbc_today_hourly, sst_by_hour, today_str,
-            fallback_ndbc=ndbc_wtmp, fallback_om=om_now_sst,
+            real_today_hourly, sst_by_hour, today_str,
+            fallback_real=real_now, fallback_om=om_now_sst,
         )
         for day in p["ocean_forecast"]:
             if isinstance(day.get("ocean"), (int, float)):
@@ -890,9 +1021,9 @@ def build_payload():
 
     # ===== Today's water-temp curve =====
     _step_req("Build today's water-temp curve",
-              "local computation — NDBC actual (past hours) + calibrated OM (future hours)")
+              "local computation — merged pier obs (past hours) + calibrated OM (future hours)")
     today_curve = build_today_curve(
-        now, ndbc_today_hourly, sst_by_hour, delta,
+        now, real_today_hourly, sst_by_hour, delta,
         sunrise_x=p.get("sunrise_x"), sunset_x=p.get("sunset_x"),
         launch_x=p.get("launch_x"),
     )
@@ -901,7 +1032,7 @@ def build_payload():
         _step_ok("hi={}°F @ {}, dot at x={} y={}".format(
             p["today_hi"], p["today_hi_time"], p["today_now_x"], p["today_now_y"]))
     else:
-        _step_fail("no curve data (Marine + NDBC both empty)")
+        _step_fail("no curve data (Marine + pier obs both empty)")
 
     # ===== Air Quality =====
     _step_req("Open-Meteo Air Quality",
