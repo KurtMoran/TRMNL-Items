@@ -411,9 +411,36 @@ def _iso_to_curve_x(iso_str):
         return None
 
 
+def _smooth_path(xy):
+    """Build an SVG `<path d>` string that draws a uniform Catmull-Rom curve
+    through every (x, y) pair, encoded as cubic Beziers. Rounds corners between
+    the data points so the rendered chart isn't visibly triangular at sharp
+    hour-to-hour changes — the curve still passes through every input point, so
+    peak values are preserved exactly."""
+    if not xy:
+        return ""
+    if len(xy) == 1:
+        return "M{},{}".format(xy[0][0], xy[0][1])
+    parts = ["M{},{}".format(xy[0][0], xy[0][1])]
+    n = len(xy)
+    for i in range(n - 1):
+        p0 = xy[i - 1] if i > 0 else xy[i]
+        p1 = xy[i]
+        p2 = xy[i + 1]
+        p3 = xy[i + 2] if i + 2 < n else xy[i + 1]
+        c1x = p1[0] + (p2[0] - p0[0]) / 6
+        c1y = p1[1] + (p2[1] - p0[1]) / 6
+        c2x = p2[0] - (p3[0] - p1[0]) / 6
+        c2y = p2[1] - (p3[1] - p1[1]) / 6
+        parts.append("C{},{} {},{} {},{}".format(
+            round(c1x), round(c1y), round(c2x), round(c2y), p2[0], p2[1]))
+    return " ".join(parts)
+
+
 def _curve_geometry(series, now, w, h, pad):
-    """Returns (points, now_x, now_y, hi_temp, hi_hour) from {hour: temp}.
-    All coordinates rounded to ints to keep the TRMNL payload under 2 KB."""
+    """Returns (path_d, now_x, now_y, hi_temp, hi_hour) from {hour: temp}.
+    `path_d` is an SVG `<path d="...">` string; all coordinates rounded to ints
+    to keep the TRMNL payload under 2 KB."""
     hours = sorted(series)
     temps = [series[k] for k in hours]
     t_min, t_max = min(temps), max(temps)
@@ -421,13 +448,13 @@ def _curve_geometry(series, now, w, h, pad):
 
     def x_of(k): return round(k / 24 * w)
     def y_of(t): return round(h - pad - (t - t_min) / span * (h - 2 * pad))
-    points = " ".join("{},{}".format(x_of(k), y_of(series[k])) for k in hours)
+    path_d = _smooth_path([(x_of(k), y_of(series[k])) for k in hours])
 
     cur_hour = now.hour + now.minute / 60
     now_x = round(min(max(cur_hour / 24 * w, 0), w))
     now_y = _interp_curve_y(series, cur_hour, w, h, pad)
     hi_hour = hours[temps.index(t_max)]
-    return points, now_x, now_y, t_max, hi_hour
+    return path_d, now_x, now_y, t_max, hi_hour
 
 
 def _interp_curve_y(series, hour_frac, w, h, pad):
@@ -735,7 +762,7 @@ def build_today_curve(now, real_hourly, om_hourly, delta, sunrise_x=None, sunset
             series[k] = om + delta  # gap before the anchor — calibrated only
     if not series:
         return {}
-    points, nx, ny, hi_t, hi_h = _curve_geometry(series, now, WATER_CURVE_W, WATER_CURVE_H, pad=4)
+    path_d, nx, ny, hi_t, hi_h = _curve_geometry(series, now, WATER_CURVE_W, WATER_CURVE_H, pad=4)
 
     # Interpolate curve y at sunrise/sunset, then compute where the sun glyph sits.
     def y_at_x(x):
@@ -749,7 +776,7 @@ def build_today_curve(now, real_hourly, om_hourly, delta, sunrise_x=None, sunset
     launch_y_curve = y_at_x(launch_x)
 
     return {
-        "today_curve_points": points,
+        "today_curve_path": path_d,
         "today_hi": round(hi_t), "today_hi_time": _hour_label(hi_h),
         "today_now_x": nx, "today_now_y": ny,
         "sunrise_y_curve": sunrise_y_curve,
@@ -780,9 +807,9 @@ def build_payload():
         "tide1_swell": "", "tide1_energy": "", "tide1_energy_tier": 0,
         "tide2_arrow": "", "tide2_time": "--", "tide2_height": "",
         "tide2_swell": "", "tide2_energy": "", "tide2_energy_tier": 0,
-        "today_curve_points": "", "today_hi": "--", "today_hi_time": "--",
+        "today_curve_path": "", "today_hi": "--", "today_hi_time": "--",
         "today_now_x": 0, "today_now_y": 0,
-        "today_tides": [],
+        "today_tides": "",
         "sunrise_x": None, "sunset_x": None,
         "sunrise_y_curve": None, "sunset_y_curve": None,
         "sunrise_sun_y": 4, "sunset_sun_y": 44,
@@ -1061,21 +1088,18 @@ def build_payload():
         next_high = None
         next_low = None
         today_date = now.date()
-        today_tides = []  # markers for the today-water curve
+        today_tides = []  # markers for the today-water curve, packed below
         for pred in tide_data.get("predictions", []):
             try:
                 t_dt = datetime.strptime(pred["t"], "%Y-%m-%d %H:%M")
             except (ValueError, KeyError):
                 continue
             kind = pred.get("type", "")
-            # Collect today's tide events for the curve markers (only x and type
-            # are used by the template — drop the human-readable label to save bytes)
+            # Collect today's tide events for the curve markers — packed as
+            # "14H,149L,281H,324L" downstream to fit the 2 KB merge_variables cap.
             if t_dt.date() == today_date and kind in ("H", "L"):
                 hour_frac = t_dt.hour + t_dt.minute / 60
-                today_tides.append({
-                    "x": round(hour_frac / 24 * WATER_CURVE_W),
-                    "type": kind,
-                })
+                today_tides.append((round(hour_frac / 24 * WATER_CURVE_W), kind))
             # Tide widget shows the next high/low after now
             if t_dt <= now:
                 continue
@@ -1104,7 +1128,7 @@ def build_payload():
             p["{}_swell".format(slot)] = sw
             p["{}_energy".format(slot)] = en
             p["{}_energy_tier".format(slot)] = tier
-        p["today_tides"] = today_tides
+        p["today_tides"] = ",".join("{}{}".format(x, k) for x, k in today_tides)
 
         ev_strs = ["{}{} {:.1f}ft".format(arrow, fmt_time(t_dt.isoformat()), height)
                    for arrow, t_dt, height in events]
@@ -1124,11 +1148,15 @@ def push_to_trmnl(payload):
         _step_ok("skipped (no webhook configured)")
         return
     url = "{}/{}".format(TRMNL_API_URL, TRMNL_WEBHOOK_UUID)
-    body_bytes = len(json.dumps(payload))
+    # Compact separators (no spaces) — saves ~80 bytes vs default `(', ', ': ')`,
+    # critical headroom against TRMNL's 2 KB merge_variables limit.
+    body = json.dumps(payload, separators=(",", ":"))
+    body_bytes = len(body)
     _step_req("TRMNL webhook",
               "POST {} — merge_variables ({} bytes)".format(_short_url(url), body_bytes))
     try:
-        resp = requests.post(url, json=payload, timeout=15)
+        resp = requests.post(url, data=body, timeout=15,
+                             headers={"Content-Type": "application/json"})
         if resp.status_code == 200:
             _step_ok("200 OK ({} bytes sent)".format(body_bytes))
         elif resp.status_code == 429:

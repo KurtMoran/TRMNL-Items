@@ -525,16 +525,23 @@
           <span class="hi">Hi {{ today_hi }}&deg; @ {{ today_hi_time }}</span>
         </div>
         <div class="curve-wrap">
+          {% comment %} today_tides is packed as "14H,149L,281H,324L" — last char is type, rest is x. {% endcomment %}
+          {% assign tide_pairs = today_tides | split: "," %}
           <svg viewBox="0 0 380 50" preserveAspectRatio="none">
-            {% for tide in today_tides %}
-              <line x1="{{ tide.x }}" y1="0" x2="{{ tide.x }}" y2="50" stroke="#000" stroke-width="1" stroke-dasharray="2.5 2.5" opacity="0.5"/>
+            {% for pair in tide_pairs %}
+              {% assign tide_xlen = pair.size | minus: 1 %}
+              {% assign tide_x = pair | slice: 0, tide_xlen %}
+              <line x1="{{ tide_x }}" y1="0" x2="{{ tide_x }}" y2="50" stroke="#000" stroke-width="1" stroke-dasharray="2.5 2.5" opacity="0.5"/>
             {% endfor %}
             {% if sunrise_x %}<line x1="{{ sunrise_x }}" y1="{{ sunrise_sun_y | plus: 2 }}" x2="{{ sunrise_x }}" y2="{{ sunrise_y_curve }}" stroke="#000" stroke-width="1" stroke-dasharray="2.5 2.5" opacity="0.5"/>{% endif %}
             {% if sunset_x %}<line x1="{{ sunset_x }}" y1="{{ sunset_y_curve }}" x2="{{ sunset_x }}" y2="{{ sunset_sun_y | minus: 2 }}" stroke="#000" stroke-width="1" stroke-dasharray="2.5 2.5" opacity="0.5"/>{% endif %}
-            <polyline fill="none" stroke="#000" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="{{ today_curve_points }}"/>
+            <path fill="none" stroke="#000" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" d="{{ today_curve_path }}"/>
             <circle cx="{{ today_now_x }}" cy="{{ today_now_y }}" r="3.5" fill="#000"/>
-            {% for tide in today_tides %}
-              <text x="{{ tide.x }}" y="9" text-anchor="middle" font-size="9" font-weight="700" fill="#000">{{ tide.type }}</text>
+            {% for pair in tide_pairs %}
+              {% assign tide_xlen = pair.size | minus: 1 %}
+              {% assign tide_x = pair | slice: 0, tide_xlen %}
+              {% assign tide_type = pair | slice: tide_xlen, 1 %}
+              <text x="{{ tide_x }}" y="9" text-anchor="middle" font-size="9" font-weight="700" fill="#000">{{ tide_type }}</text>
             {% endfor %}
             {% if sunrise_x %}
               <circle cx="{{ sunrise_x }}" cy="{{ sunrise_sun_y }}" r="2" fill="#000"/>
