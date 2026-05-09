@@ -35,10 +35,11 @@ NDBC_URL = "https://www.ndbc.noaa.gov/data/realtime2/{}.txt".format(NDBC_STATION
 
 # Launch Library 2 (free) — refreshed on a background thread so timing is fully
 # decoupled from POLL_INTERVAL_SEC. Free unauthenticated tier: ~15 req/hour.
-# Default 480s = 7.5 calls/hour (~50% of free tier). Cache file persists across
-# container restarts so a restart never burns extra budget.
+# Default 300s = 12 calls/hour (~80% of free tier — comfortable headroom under
+# the cap). Cache file persists across container restarts so a restart never
+# burns extra budget.
 LAUNCH_CACHE_FILE = os.getenv("LAUNCH_CACHE_FILE", "/data/launches_cache.json")
-LAUNCH_REFRESH_SEC = int(os.getenv("LAUNCH_REFRESH_SEC", "480"))
+LAUNCH_REFRESH_SEC = int(os.getenv("LAUNCH_REFRESH_SEC", "300"))
 LAUNCH_LOOKAHEAD_DAYS = int(os.getenv("LAUNCH_LOOKAHEAD_DAYS", "3"))
 LL2_LOCATION_IDS = os.getenv("LL2_LOCATION_IDS", "11")  # 11 = Vandenberg SFB
 LL2_API_KEY = os.getenv("LL2_API_KEY", "")  # optional; lifts rate limit when set
@@ -611,8 +612,8 @@ def fetch_launches_smart(now):
         "fetched_at": now.isoformat(),
         "launches": launches,
     })
-    return launches, "fresh fetch via LL2 ({} entries; next refresh in {}h)".format(
-        len(launches), LAUNCH_REFRESH_SEC // 3600)
+    return launches, "fresh fetch via LL2 ({} entries; next refresh in {}m)".format(
+        len(launches), LAUNCH_REFRESH_SEC // 60)
 
 
 def pick_upcoming_launch(launches, now, lookahead_days=None):

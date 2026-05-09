@@ -21,13 +21,13 @@ Default location: San Diego (land) + La Jolla Shores (ocean). Configurable via e
 | Open-Meteo Marine | None | Free | 1 request/cycle |
 | NOAA CO-OPS (Scripps Pier water_temperature, 6-min) | None | Free | 1 request/cycle |
 | NDBC realtime2 (Scripps Pier WTMP, secondary) | None | Free | 1 request/cycle |
-| Launch Library 2 (Vandenberg launches) | None (optional token) | Free | ~7.5 requests/hour (~50% of free tier) |
+| Launch Library 2 (Vandenberg launches) | None (optional token) | Free | ~12 requests/hour (~80% of free tier) |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
 Polls every 15 minutes (matches TRMNL's e-ink refresh cadence).
 
 Launch Library 2 is fetched on its own background thread — `LAUNCH_REFRESH_SEC`
-(default 480s = ~7.5 calls/hour, ~50% of the free tier) controls cadence,
+(default 300s = 12 calls/hour, ~80% of the free 15/hr tier) controls cadence,
 fully independent of `POLL_INTERVAL_SEC`. Cache file persists to disk so
 container restarts don't burn extra budget. On `429` or network error we
 keep serving the stale cache.
@@ -74,7 +74,7 @@ docker run -d \
 | `DATA_FILE` | No | /data/weather_state.json | State file path |
 | `NDBC_STATION` | No | LJAC1 | NDBC station ID for secondary water-temp feed (default: Scripps Pier) |
 | `NOAA_WTEMP_STATION` | No | (same as `TIDE_STATION_ID`) | NOAA CO-OPS station ID for primary 6-min water-temp feed |
-| `LAUNCH_REFRESH_SEC` | No | 480 | Seconds between Launch Library 2 fetches (default 8min = ~7.5/hour, ~50% of free tier) |
+| `LAUNCH_REFRESH_SEC` | No | 300 | Seconds between Launch Library 2 fetches (default 5min = 12/hour, ~80% of free 15/hr tier) |
 | `LAUNCH_LOOKAHEAD_DAYS` | No | 3 | How many days ahead to look for upcoming launches. Today's launches get a curve marker; future-day launches show only in the hero text with a day-of-week prefix |
 | `LL2_LOCATION_IDS` | No | 11 | Comma-separated LL2 location IDs (11 = Vandenberg SFB) |
 | `LL2_API_KEY` | No | — | Optional LL2 token; lifts the free-tier rate limit |
