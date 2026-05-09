@@ -75,6 +75,7 @@ docker run -d \
 | `NDBC_STATION` | No | LJAC1 | NDBC station ID for secondary water-temp feed (default: Scripps Pier) |
 | `NOAA_WTEMP_STATION` | No | (same as `TIDE_STATION_ID`) | NOAA CO-OPS station ID for primary 6-min water-temp feed |
 | `LAUNCH_REFRESH_SEC` | No | 480 | Seconds between Launch Library 2 fetches (default 8min = ~7.5/hour, ~50% of free tier) |
+| `LAUNCH_LOOKAHEAD_DAYS` | No | 3 | How many days ahead to look for upcoming launches. Today's launches get a curve marker; future-day launches show only in the hero text with a day-of-week prefix |
 | `LL2_LOCATION_IDS` | No | 11 | Comma-separated LL2 location IDs (11 = Vandenberg SFB) |
 | `LL2_API_KEY` | No | — | Optional LL2 token; lifts the free-tier rate limit |
 | `LAUNCH_LOCATION_LABEL` | No | Vandenberg | Short label shown on the e-ink display |

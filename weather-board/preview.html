@@ -286,11 +286,20 @@
       opacity: 0.55;
       font-weight: 700;
     }
-    .ocean .today-water .stats .hi {
+    .ocean .today-water .stats .hilo {
+      display: grid;
+      grid-template-columns: auto auto auto auto;
+      column-gap: 4px;
+      row-gap: 2px;
+      align-items: baseline;
       font-size: 13px;
       font-weight: 700;
       margin-top: 4px;
+      font-variant-numeric: tabular-nums;
     }
+    .ocean .today-water .stats .hilo .lbl { text-align: left; }
+    .ocean .today-water .stats .hilo .v { text-align: right; }
+    .ocean .today-water .stats .hilo .dim { opacity: 0.65; }
     .ocean .today-water .curve-wrap {
       flex: 1;
       display: flex;
@@ -532,7 +541,10 @@
           <div class="stats">
             <span class="now-lbl">Now</span>
             <span class="now">66&deg;F</span>
-            <span class="hi">Hi 68&deg; @ 4pm</span>
+            <div class="hilo">
+              <span class="lbl">Hi</span><span class="v">68&deg;</span><span>@</span><span>4pm</span>
+              <span class="lbl dim">Lo</span><span class="v dim">63&deg;</span><span class="dim">@</span><span class="dim">5am</span>
+            </div>
           </div>
           <div class="curve-wrap">
             <svg viewBox="0 0 380 50" preserveAspectRatio="none">

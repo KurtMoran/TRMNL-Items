@@ -39,6 +39,7 @@ NDBC_URL = "https://www.ndbc.noaa.gov/data/realtime2/{}.txt".format(NDBC_STATION
 # container restarts so a restart never burns extra budget.
 LAUNCH_CACHE_FILE = os.getenv("LAUNCH_CACHE_FILE", "/data/launches_cache.json")
 LAUNCH_REFRESH_SEC = int(os.getenv("LAUNCH_REFRESH_SEC", "480"))
+LAUNCH_LOOKAHEAD_DAYS = int(os.getenv("LAUNCH_LOOKAHEAD_DAYS", "3"))
 LL2_LOCATION_IDS = os.getenv("LL2_LOCATION_IDS", "11")  # 11 = Vandenberg SFB
 LL2_API_KEY = os.getenv("LL2_API_KEY", "")  # optional; lifts rate limit when set
 LAUNCH_LOCATION_LABEL = os.getenv("LAUNCH_LOCATION_LABEL", "Vandenberg")
@@ -438,9 +439,9 @@ def _smooth_path(xy):
 
 
 def _curve_geometry(series, now, w, h, pad):
-    """Returns (path_d, now_x, now_y, hi_temp, hi_hour) from {hour: temp}.
-    `path_d` is an SVG `<path d="...">` string; all coordinates rounded to ints
-    to keep the TRMNL payload under 2 KB."""
+    """Returns (path_d, now_x, now_y, hi_temp, hi_hour, lo_temp, lo_hour) from
+    {hour: temp}. `path_d` is an SVG `<path d="...">` string; all coordinates
+    rounded to ints to keep the TRMNL payload under 2 KB."""
     hours = sorted(series)
     temps = [series[k] for k in hours]
     t_min, t_max = min(temps), max(temps)
@@ -454,7 +455,8 @@ def _curve_geometry(series, now, w, h, pad):
     now_x = round(min(max(cur_hour / 24 * w, 0), w))
     now_y = _interp_curve_y(series, cur_hour, w, h, pad)
     hi_hour = hours[temps.index(t_max)]
-    return path_d, now_x, now_y, t_max, hi_hour
+    lo_hour = hours[temps.index(t_min)]
+    return path_d, now_x, now_y, t_max, hi_hour, t_min, lo_hour
 
 
 def _interp_curve_y(series, hour_frac, w, h, pad):
@@ -553,10 +555,10 @@ def fetch_launches_smart(now):
         return cached, "cache hit ({}s old, {} entries; refresh window {}s)".format(
             age, len(cached), LAUNCH_REFRESH_SEC)
 
-    # Pad the UTC window by ±1 day so launches near local midnight aren't missed
-    # by the timezone shift.
+    # Window covers today through `LAUNCH_LOOKAHEAD_DAYS` ahead, padded ±1 day
+    # in UTC so launches near local midnight aren't missed by the timezone shift.
     win_start = (now.date() - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
-    win_end = (now.date() + timedelta(days=2)).strftime("%Y-%m-%dT00:00:00Z")
+    win_end = (now.date() + timedelta(days=LAUNCH_LOOKAHEAD_DAYS + 1)).strftime("%Y-%m-%dT00:00:00Z")
     url = (
         "https://ll.thespacedevs.com/2.3.0/launches/"
         "?location__ids={loc}&net__gte={start}&net__lt={end}&limit=20&mode=normal"
@@ -587,7 +589,8 @@ def fetch_launches_smart(now):
         except ValueError:
             continue
         net_local = (net_utc + timedelta(hours=utc_offset_hours)).replace(tzinfo=None)
-        if net_local.date() != now.date():
+        days_from_today = (net_local.date() - now.date()).days
+        if days_from_today < 0 or days_from_today > LAUNCH_LOOKAHEAD_DAYS:
             continue
         rocket_obj = r.get("rocket") or {}
         config = rocket_obj.get("configuration") or {}
@@ -612,24 +615,26 @@ def fetch_launches_smart(now):
         len(launches), LAUNCH_REFRESH_SEC // 3600)
 
 
-def pick_todays_launch(launches, now):
-    """Returns (net_local_dt, launch_dict) for the next launch today, or — if all
-    of today's launches have already happened — the most recent one. None if no
-    launches today."""
+def pick_upcoming_launch(launches, now, lookahead_days=None):
+    """Returns (net_local_dt, launch_dict) for the next upcoming launch within
+    `lookahead_days` of today, or None if none scheduled in window. Past launches
+    today are skipped (we want the next one a swimmer might still see)."""
+    if lookahead_days is None:
+        lookahead_days = LAUNCH_LOOKAHEAD_DAYS
+    cutoff = now + timedelta(days=lookahead_days + 1)
     items = []
     for L in launches:
         try:
             dt = datetime.fromisoformat(L["net_local"])
         except (KeyError, ValueError):
             continue
+        if dt < now or dt > cutoff:
+            continue
         items.append((dt, L))
     if not items:
         return None
     items.sort(key=lambda x: x[0])
-    for dt, L in items:
-        if dt >= now:
-            return dt, L
-    return items[-1]
+    return items[0]
 
 
 def shorten_pad(pad_name):
@@ -645,15 +650,19 @@ def shorten_pad(pad_name):
 
 
 def build_launch_fields(now, launches):
-    """Returns merge-var dict for a launch happening today, or zeros/blanks if none."""
+    """Returns merge-var dict for the next upcoming launch in the lookahead
+    window, or zeros/blanks if none. Today's launches get a curve marker
+    (`launch_is_today=True`); future-day launches show only in the hero text
+    with a day-of-week prefix in `launch_time_str` (e.g. "Sat 6:30p")."""
     fields = {
         "has_launch": False,
+        "launch_is_today": False,
         "launch_x": None,
         "launch_time_str": "",
         "launch_what": "",
         "launch_where": "",
     }
-    pick = pick_todays_launch(launches, now)
+    pick = pick_upcoming_launch(launches, now)
     if not pick:
         return fields
     net_dt, L = pick
@@ -674,17 +683,25 @@ def build_launch_fields(now, launches):
     if pad_short:
         where = "{} {}".format(LAUNCH_LOCATION_LABEL, pad_short)
 
-    hour_frac = net_dt.hour + net_dt.minute / 60
-    raw_x = hour_frac / 24 * WATER_CURVE_W
-    # Clamp so the ~8px-wide rocket glyph and its fins never clip the chart edge.
-    clamped_x = min(max(raw_x, 5), WATER_CURVE_W - 5)
+    is_today = net_dt.date() == now.date()
+    time_str = fmt_time(net_dt.isoformat())
+    if not is_today:
+        time_str = "{} {}".format(net_dt.strftime("%a"), time_str)
+
     fields.update({
         "has_launch": True,
-        "launch_x": round(clamped_x, 1),
-        "launch_time_str": fmt_time(net_dt.isoformat()),
+        "launch_is_today": is_today,
+        "launch_time_str": time_str,
         "launch_what": what,
         "launch_where": where,
     })
+
+    if is_today:
+        hour_frac = net_dt.hour + net_dt.minute / 60
+        raw_x = hour_frac / 24 * WATER_CURVE_W
+        # Clamp so the ~8px-wide rocket glyph and its fins never clip the edge.
+        clamped_x = min(max(raw_x, 5), WATER_CURVE_W - 5)
+        fields["launch_x"] = round(clamped_x, 1)
     return fields
 
 
@@ -762,7 +779,7 @@ def build_today_curve(now, real_hourly, om_hourly, delta, sunrise_x=None, sunset
             series[k] = om + delta  # gap before the anchor — calibrated only
     if not series:
         return {}
-    path_d, nx, ny, hi_t, hi_h = _curve_geometry(series, now, WATER_CURVE_W, WATER_CURVE_H, pad=4)
+    path_d, nx, ny, hi_t, hi_h, lo_t, lo_h = _curve_geometry(series, now, WATER_CURVE_W, WATER_CURVE_H, pad=4)
 
     # Interpolate curve y at sunrise/sunset, then compute where the sun glyph sits.
     def y_at_x(x):
@@ -778,6 +795,7 @@ def build_today_curve(now, real_hourly, om_hourly, delta, sunrise_x=None, sunset
     return {
         "today_curve_path": path_d,
         "today_hi": round(hi_t), "today_hi_time": _hour_label(hi_h),
+        "today_lo": round(lo_t), "today_lo_time": _hour_label(lo_h),
         "today_now_x": nx, "today_now_y": ny,
         "sunrise_y_curve": sunrise_y_curve,
         "sunset_y_curve": sunset_y_curve,
@@ -808,24 +826,26 @@ def build_payload():
         "tide2_arrow": "", "tide2_time": "--", "tide2_height": "",
         "tide2_swell": "", "tide2_energy": "", "tide2_energy_tier": 0,
         "today_curve_path": "", "today_hi": "--", "today_hi_time": "--",
+        "today_lo": "--", "today_lo_time": "--",
         "today_now_x": 0, "today_now_y": 0,
         "today_tides": "",
         "sunrise_x": None, "sunset_x": None,
         "sunrise_y_curve": None, "sunset_y_curve": None,
         "sunrise_sun_y": 4, "sunset_sun_y": 44,
-        "has_launch": False, "launch_x": None, "launch_y_curve": None,
+        "has_launch": False, "launch_is_today": False, "launch_x": None,
+        "launch_y_curve": None,
         "launch_time_str": "", "launch_what": "", "launch_where": "",
     }
 
     # ===== Launches =====
     _step_req("Launches",
-              "GET ll.thespacedevs.com/2.3.0/launches/ — {} (location_ids={}, ±1d window)".format(
-                  LAUNCH_LOCATION_LABEL, LL2_LOCATION_IDS))
+              "GET ll.thespacedevs.com/2.3.0/launches/ — {} (location_ids={}, today + {}d window)".format(
+                  LAUNCH_LOCATION_LABEL, LL2_LOCATION_IDS, LAUNCH_LOOKAHEAD_DAYS))
     launches_today, lsource = fetch_launches_smart(now)
     p.update(build_launch_fields(now, launches_today))
-    launch_str = ("today: {} {} @ {}".format(
+    launch_str = ("next: {} {} @ {}".format(
         p["launch_what"], p["launch_where"], p["launch_time_str"])
-        if p["has_launch"] else "none today")
+        if p["has_launch"] else "none in {}d".format(LAUNCH_LOOKAHEAD_DAYS))
     msg = "{} • {}".format(lsource, launch_str)
     if "failed" in lsource or "rate-limited" in lsource:
         _step_fail(msg)
