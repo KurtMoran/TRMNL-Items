@@ -124,25 +124,25 @@
       flex-direction: column;
       justify-content: space-around;
     }
-    .forecast-row {
+    .forecast-row, .ocean-row {
       display: flex;
       align-items: center;
-      font-size: 15px;
+      font-size: 14px;
       gap: 8px;
     }
-    .forecast-row .day {
+    .forecast-row .day, .ocean-row .day {
       flex: 0 0 36px;
       font-weight: 700;
       letter-spacing: 0.5px;
     }
     .forecast-row .mini-icon {
-      flex: 0 0 26px;
-      height: 26px;
+      flex: 0 0 24px;
+      height: 24px;
       display: flex;
       align-items: center;
       justify-content: center;
     }
-    .forecast-row .mini-icon svg { width: 26px; height: 26px; }
+    .forecast-row .mini-icon svg { width: 24px; height: 24px; }
     .forecast-row .temps {
       flex: 1;
       text-align: right;
@@ -159,19 +159,8 @@
       min-width: 30px;
       text-align: right;
     }
-    .ocean-row {
-      display: flex;
-      align-items: center;
-      font-size: 13px;
-      gap: 6px;
-    }
-    .ocean-row .day {
-      flex: 0 0 36px;
-      font-weight: 700;
-      letter-spacing: 0.5px;
-    }
     .ocean-row .ocean-temp {
-      flex: 0 0 36px;
+      flex: 0 0 40px;
       font-weight: 600;
       letter-spacing: -0.3px;
     }
@@ -180,14 +169,15 @@
       font-weight: 600;
     }
     .ocean-row .energy-bar {
-      flex: 0 0 30px;
+      flex: 0 0 28px;
       height: 16px;
       display: flex;
       align-items: center;
     }
-    .ocean-row .energy-bar svg { width: 30px; height: 16px; }
+    .ocean-row .energy-bar svg { width: 28px; height: 16px; }
     .ocean-row .energy {
       flex: 0 0 auto;
+      font-size: 11px;
       font-weight: 700;
       letter-spacing: -0.3px;
       min-width: 50px;
