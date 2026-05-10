@@ -22,6 +22,7 @@ Default location: San Diego (land) + La Jolla Shores (ocean). Configurable via e
 | NOAA CO-OPS (Scripps Pier water_temperature, 6-min) | None | Free | 1 request/cycle |
 | NDBC realtime2 (Scripps Pier WTMP, secondary) | None | Free | 1 request/cycle |
 | Launch Library 2 (Vandenberg launches) | None (optional token) | Free | ~12 requests/hour (~80% of free tier) |
+| Sunsethue (sunset quality forecast) | API key | Free tier | 4 requests/day (6h cache, 5 credits each = 20/day) |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
 Polls every 15 minutes (matches TRMNL's e-ink refresh cadence).
@@ -80,6 +81,11 @@ docker run -d \
 | `LL2_API_KEY` | No | — | Optional LL2 token; lifts the free-tier rate limit |
 | `LAUNCH_LOCATION_LABEL` | No | Vandenberg | Short label shown on the e-ink display |
 | `LAUNCH_CACHE_FILE` | No | /data/launches_cache.json | Where the launch cache is persisted |
+| `SUNSETHUE_API_KEY` | No (recommended) | — | Sunsethue API key (sunsethue.com/dev-api/portal). When unset, the sunset quality sublabel stays hidden |
+| `SUNSETHUE_LAT` | No | 32.7255 | Latitude for the sunset quality forecast (default: Sunset Cliffs, San Diego) |
+| `SUNSETHUE_LON` | No | -117.2580 | Longitude for the sunset quality forecast |
+| `SUNSETHUE_REFRESH_SEC` | No | 21600 | Cache duration in seconds (default 6h = 4 fetches/day, covers both Sunsethue model update windows) |
+| `SUNSETHUE_CACHE_FILE` | No | /data/sunsethue_cache.json | Where the sunset-quality cache is persisted |
 
 ## Files
 

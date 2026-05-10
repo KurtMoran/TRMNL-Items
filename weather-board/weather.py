@@ -45,6 +45,17 @@ LL2_LOCATION_IDS = os.getenv("LL2_LOCATION_IDS", "11")  # 11 = Vandenberg SFB
 LL2_API_KEY = os.getenv("LL2_API_KEY", "")  # optional; lifts rate limit when set
 LAUNCH_LOCATION_LABEL = os.getenv("LAUNCH_LOCATION_LABEL", "Vandenberg")
 
+# Sunsethue — sunset quality forecast (Poor/Fair/Good/Great/Excellent). Defaults
+# to Sunset Cliffs, San Diego. The underlying model refreshes only twice daily
+# (8-9 UTC and 18-19 UTC) so we cache for 6h: 4 fetches/day × 5 credits/fetch =
+# 20 credits/day, well under any free-tier quota. Cache file persists across
+# restarts so a container bounce never re-spends credits.
+SUNSETHUE_API_KEY = os.getenv("SUNSETHUE_API_KEY", "")
+SUNSETHUE_LAT = float(os.getenv("SUNSETHUE_LAT", "32.72545073080408"))
+SUNSETHUE_LON = float(os.getenv("SUNSETHUE_LON", "-117.25801401320362"))
+SUNSETHUE_CACHE_FILE = os.getenv("SUNSETHUE_CACHE_FILE", "/data/sunsethue_cache.json")
+SUNSETHUE_REFRESH_SEC = int(os.getenv("SUNSETHUE_REFRESH_SEC", "21600"))  # 6h
+
 FORECAST_URL = (
     "https://api.open-meteo.com/v1/forecast"
     "?latitude={lat}&longitude={lon}"
@@ -191,19 +202,19 @@ def tide_url():
 
 
 def fmt_time(iso_str):
-    """ISO datetime ('2026-04-29T06:12') -> '6:12a'."""
+    """ISO datetime ('2026-04-29T06:12') -> '6:12am'."""
     if not iso_str:
         return "--"
     try:
         dt = datetime.fromisoformat(iso_str)
         h, m = dt.hour, dt.minute
         if h == 0:
-            return "12:{:02d}a".format(m)
+            return "12:{:02d}am".format(m)
         if h < 12:
-            return "{}:{:02d}a".format(h, m)
+            return "{}:{:02d}am".format(h, m)
         if h == 12:
-            return "12:{:02d}p".format(m)
-        return "{}:{:02d}p".format(h - 12, m)
+            return "12:{:02d}pm".format(m)
+        return "{}:{:02d}pm".format(h - 12, m)
     except Exception:
         return "--"
 
@@ -650,6 +661,98 @@ def shorten_pad(pad_name):
     return p
 
 
+def _load_sunsethue_cache():
+    try:
+        with open(SUNSETHUE_CACHE_FILE) as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_sunsethue_cache(cache):
+    try:
+        os.makedirs(os.path.dirname(SUNSETHUE_CACHE_FILE), exist_ok=True)
+        with open(SUNSETHUE_CACHE_FILE, "w") as f:
+            json.dump(cache, f)
+    except Exception as e:
+        log.warning("Could not save Sunsethue cache: %s", e)
+
+
+def fetch_sun_quality(now, event_type):
+    """Fetches today's Sunsethue forecast for `event_type` ('sunrise' or 'sunset').
+    Returns (quality_val_or_None, quality_text, source_str).
+
+    The Sunsethue model only refreshes twice daily, so a 6h cache hits both
+    update windows without ever burning more than 4 fetches/day per event type
+    (8 fetches × 5 credits = 40 credits/day total for both events). On HTTP
+    failure we serve the stale cache from earlier today; if that's missing
+    we return None so the template hides the number.
+
+    Cache file is shared between sunrise/sunset under per-event keys so
+    backfilling either one doesn't clobber the other.
+    """
+    if not SUNSETHUE_API_KEY:
+        return None, "", "skipped (no API key configured)"
+
+    today_key = now.date().isoformat()
+    cache = _load_sunsethue_cache()
+    entry = cache.get(event_type) or {}
+
+    fetched_at = None
+    if entry.get("fetched_at"):
+        try:
+            fetched_at = datetime.fromisoformat(entry["fetched_at"])
+        except ValueError:
+            fetched_at = None
+
+    cache_fresh = (
+        entry.get("date_key") == today_key
+        and fetched_at is not None
+        and (now - fetched_at).total_seconds() < SUNSETHUE_REFRESH_SEC
+        and isinstance(entry.get("quality"), (int, float))
+    )
+    if cache_fresh:
+        age = int((now - fetched_at).total_seconds())
+        return entry["quality"], entry.get("quality_text", ""), \
+            "cache hit ({}s old, q={:.2f} — refresh window {}h)".format(
+                age, entry["quality"], SUNSETHUE_REFRESH_SEC // 3600)
+
+    url = (
+        "https://api.sunsethue.com/event"
+        "?latitude={lat}&longitude={lon}&date={date}&type={type}"
+    ).format(lat=SUNSETHUE_LAT, lon=SUNSETHUE_LON, date=today_key, type=event_type)
+    try:
+        resp = requests.get(url, timeout=15,
+                            headers={"x-api-key": SUNSETHUE_API_KEY})
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        stale_v = entry.get("quality") if entry.get("date_key") == today_key else None
+        stale_t = entry.get("quality_text", "") if entry.get("date_key") == today_key else ""
+        return stale_v, stale_t, "fetch failed ({}); served stale cache ({})".format(
+            e, "q={:.2f}".format(stale_v) if isinstance(stale_v, (int, float)) else "empty")
+
+    event = data.get("data") or {}
+    if not event.get("model_data"):
+        return None, "", "no model_data (out of horizon or model gap)"
+
+    quality_val = event.get("quality")
+    quality_text = event.get("quality_text", "") or ""
+
+    cache[event_type] = {
+        "date_key": today_key,
+        "fetched_at": now.isoformat(),
+        "quality": quality_val,
+        "quality_text": quality_text,
+    }
+    _save_sunsethue_cache(cache)
+
+    q_str = "{:.2f}".format(quality_val) if isinstance(quality_val, (int, float)) else "n/a"
+    return quality_val, quality_text, "fresh fetch ({} q={}; next refresh in {}h)".format(
+        quality_text or "n/a", q_str, SUNSETHUE_REFRESH_SEC // 3600)
+
+
 def build_launch_fields(now, launches):
     """Returns merge-var dict for the next upcoming launch in the lookahead
     window, or zeros/blanks if none. Today's launches get a curve marker
@@ -818,7 +921,9 @@ def build_payload():
         "hi": "--", "lo": "--", "icon": "cloud", "phrase": "",
         "delta": "", "tdelta": "", "feels": "--",
         "wind": "--", "humid": "--", "uv": "--", "rain": "--",
-        "rise": "--", "set": "--", "forecast": [],
+        "rise": "--", "set": "--",
+        "sunrise_quality": "", "sunset_quality": "",
+        "forecast": [],
         "ocean": "--",
         "ocean_forecast": [],
         "aqi": "--",
@@ -946,6 +1051,24 @@ def build_payload():
         _step_ok("{}°/{}° {}, feels {}°, wind {}, rise {} set {}, {}d forecast".format(
             p["hi"], p["lo"], p["phrase"], p["feels"],
             p["wind"], p["rise"], p["set"], len(forecast_days)))
+
+    # ===== Sunsethue (sunrise + sunset quality forecast) =====
+    for event_type, slot, time_field in (
+        ("sunrise", "sunrise_quality", "rise"),
+        ("sunset", "sunset_quality", "set"),
+    ):
+        _step_req("Sunsethue {}".format(event_type),
+                  "GET api.sunsethue.com/event?type={} — ({:.3f},{:.3f}) today".format(
+                      event_type, SUNSETHUE_LAT, SUNSETHUE_LON))
+        q_val, q_text, qsource = fetch_sun_quality(now, event_type)
+        if isinstance(q_val, (int, float)):
+            p[slot] = "{}%".format(round(q_val * 100))
+        qmsg = "{} • shows '{}' next to {} ({})".format(
+            qsource, p[slot] or "—", p[time_field], q_text or "n/a")
+        if "failed" in qsource:
+            _step_fail(qmsg)
+        else:
+            _step_ok(qmsg)
 
     # ===== Open-Meteo Marine =====
     _step_req("Open-Meteo Marine",

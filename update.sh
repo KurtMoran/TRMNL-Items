@@ -14,6 +14,7 @@ GEMINI_API_KEY="${GEMINI_API_KEY:?Set GEMINI_API_KEY}"
 AIRPORT_WEBHOOK_UUID="${AIRPORT_WEBHOOK_UUID:?Set AIRPORT_WEBHOOK_UUID}"
 WIKI_WEBHOOK_UUID="${WIKI_WEBHOOK_UUID:?Set WIKI_WEBHOOK_UUID}"
 WEATHER_WEBHOOK_UUID="${WEATHER_WEBHOOK_UUID:?Set WEATHER_WEBHOOK_UUID}"
+SUNSETHUE_API_KEY="${SUNSETHUE_API_KEY:?Set SUNSETHUE_API_KEY}"
 
 cd /mnt/user/appdata/TRMNL-Items
 
@@ -98,6 +99,7 @@ if needs_rebuild "weather-board" "weather-board"; then
         --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \
         -e TZ=America/Los_Angeles \
         -e TRMNL_WEBHOOK_UUID="$WEATHER_WEBHOOK_UUID" \
+        -e SUNSETHUE_API_KEY="$SUNSETHUE_API_KEY" \
         -v /mnt/user/appdata/TRMNL-Items/weather-board/data:/data \
         weather-board
 fi
