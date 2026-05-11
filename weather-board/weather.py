@@ -62,7 +62,8 @@ FORECAST_URL = (
     "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
     "wind_speed_10m,wind_direction_10m,weather_code"
     "&daily=temperature_2m_max,temperature_2m_min,weather_code,sunrise,sunset,"
-    "uv_index_max,precipitation_probability_max"
+    "uv_index_max,precipitation_probability_max,"
+    "wind_speed_10m_max,wind_direction_10m_dominant"
     "&temperature_unit=fahrenheit&wind_speed_unit=mph"
     "&timezone={tz}&past_days=1&forecast_days=4"
 ).format(lat=WEATHER_LAT, lon=WEATHER_LON, tz=TZ_NAME)
@@ -133,6 +134,18 @@ def cardinal(deg):
     dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
             "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
     return dirs[round(deg / 22.5) % 16]
+
+
+def direction_arrow(deg):
+    """Convert a direction in degrees to a unicode arrow pointing TOWARD the
+    origin direction. E.g., a swell coming FROM the west (270°) returns ←;
+    a north wind (0°) returns ↑. Used for the swell-direction badge on the
+    forecast cards. Returns empty string if deg is None/non-numeric."""
+    if not isinstance(deg, (int, float)):
+        return ""
+    arrows = ["↑", "↗", "→", "↘",
+              "↓", "↙", "←", "↖"]
+    return arrows[round(deg / 45) % 8]
 
 
 def energy_tier(kj):
@@ -679,78 +692,102 @@ def _save_sunsethue_cache(cache):
         log.warning("Could not save Sunsethue cache: %s", e)
 
 
-def fetch_sun_quality(now, event_type):
-    """Fetches today's Sunsethue forecast for `event_type` ('sunrise' or 'sunset').
-    Returns (quality_val_or_None, quality_text, source_str).
+def fetch_sun_quality_all(now):
+    """Fetches sunrise + sunset quality for today + the next 2 days via the
+    Sunsethue /forecast endpoint in a single HTTP call.
 
-    The Sunsethue model only refreshes twice daily, so a 6h cache hits both
-    update windows without ever burning more than 4 fetches/day per event type
-    (8 fetches × 5 credits = 40 credits/day total for both events). On HTTP
-    failure we serve the stale cache from earlier today; if that's missing
-    we return None so the template hides the number.
+    Returns (days_dict, source_str) where days_dict is keyed by local-date
+    ('YYYY-MM-DD') and each value is a dict with 'sunrise' and/or 'sunset'
+    sub-dicts containing 'quality' (0-1 float) and 'quality_text' keys.
 
-    Cache file is shared between sunrise/sunset under per-event keys so
-    backfilling either one doesn't clobber the other.
+    Sunsethue's model refreshes only twice daily, so we cache for 6h. The
+    /forecast endpoint pulls 6 events (3 days × sunrise+sunset) at once for
+    30 credits per fetch × 4 fetches/day = 120 credits/day total — well under
+    any free-tier quota and saves 5 round-trips per refresh vs. the old per-
+    event approach.
+
+    Cache structure is keyed by local date, so partial-day backfills (e.g.,
+    sunset model data arrives before sunrise) are handled cleanly. On HTTP
+    failure we serve the stale cache from this morning; if that's also missing
+    we return an empty dict so the template hides the quality numbers.
     """
     if not SUNSETHUE_API_KEY:
-        return None, "", "skipped (no API key configured)"
+        return {}, "skipped (no API key configured)"
 
     today_key = now.date().isoformat()
     cache = _load_sunsethue_cache()
-    entry = cache.get(event_type) or {}
 
     fetched_at = None
-    if entry.get("fetched_at"):
+    if cache.get("fetched_at"):
         try:
-            fetched_at = datetime.fromisoformat(entry["fetched_at"])
+            fetched_at = datetime.fromisoformat(cache["fetched_at"])
         except ValueError:
             fetched_at = None
 
     cache_fresh = (
-        entry.get("date_key") == today_key
+        cache.get("date_key") == today_key
         and fetched_at is not None
         and (now - fetched_at).total_seconds() < SUNSETHUE_REFRESH_SEC
-        and isinstance(entry.get("quality"), (int, float))
+        and isinstance(cache.get("days"), dict)
+        and cache["days"]
     )
     if cache_fresh:
         age = int((now - fetched_at).total_seconds())
-        return entry["quality"], entry.get("quality_text", ""), \
-            "cache hit ({}s old, q={:.2f} — refresh window {}h)".format(
-                age, entry["quality"], SUNSETHUE_REFRESH_SEC // 3600)
+        return cache["days"], "cache hit ({}s old, {} days — refresh window {}h)".format(
+            age, len(cache["days"]), SUNSETHUE_REFRESH_SEC // 3600)
+
+    # Sunsethue's /forecast endpoint needs the local timezone as a float
+    # offset (e.g., -7 for PDT) so it can group events into the right local
+    # date when filtering by `days`.
+    utc_offset_hours = datetime.now().astimezone().utcoffset().total_seconds() / 3600
 
     url = (
-        "https://api.sunsethue.com/event"
-        "?latitude={lat}&longitude={lon}&date={date}&type={type}"
-    ).format(lat=SUNSETHUE_LAT, lon=SUNSETHUE_LON, date=today_key, type=event_type)
+        "https://api.sunsethue.com/forecast"
+        "?latitude={lat}&longitude={lon}&days=3&type=both&timezone={tz}"
+    ).format(lat=SUNSETHUE_LAT, lon=SUNSETHUE_LON, tz=utc_offset_hours)
     try:
         resp = requests.get(url, timeout=15,
                             headers={"x-api-key": SUNSETHUE_API_KEY})
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        stale_v = entry.get("quality") if entry.get("date_key") == today_key else None
-        stale_t = entry.get("quality_text", "") if entry.get("date_key") == today_key else ""
-        return stale_v, stale_t, "fetch failed ({}); served stale cache ({})".format(
-            e, "q={:.2f}".format(stale_v) if isinstance(stale_v, (int, float)) else "empty")
+        stale = (cache.get("days", {})
+                 if isinstance(cache.get("days"), dict) else {})
+        return stale, "fetch failed ({}); served stale cache ({} days)".format(
+            e, len(stale))
 
-    event = data.get("data") or {}
-    if not event.get("model_data"):
-        return None, "", "no model_data (out of horizon or model gap)"
+    # Group events by local date. The API returns event times in UTC; we shift
+    # them by the same offset we passed to the API so the date key matches the
+    # local calendar day a viewer cares about (e.g., a 2am-UTC sunrise belongs
+    # to yesterday in California).
+    days = {}
+    for event in (data.get("data") or []):
+        if not event.get("model_data"):
+            continue
+        event_time = event.get("time")
+        event_type = event.get("type")
+        if not event_time or event_type not in ("sunrise", "sunset"):
+            continue
+        try:
+            dt_utc = datetime.fromisoformat(event_time.replace("Z", "+00:00"))
+            dt_local = dt_utc + timedelta(hours=utc_offset_hours)
+            date_key = dt_local.date().isoformat()
+        except (ValueError, KeyError):
+            continue
+        days.setdefault(date_key, {})[event_type] = {
+            "quality": event.get("quality"),
+            "quality_text": event.get("quality_text", "") or "",
+        }
 
-    quality_val = event.get("quality")
-    quality_text = event.get("quality_text", "") or ""
-
-    cache[event_type] = {
+    _save_sunsethue_cache({
         "date_key": today_key,
         "fetched_at": now.isoformat(),
-        "quality": quality_val,
-        "quality_text": quality_text,
-    }
-    _save_sunsethue_cache(cache)
+        "days": days,
+    })
 
-    q_str = "{:.2f}".format(quality_val) if isinstance(quality_val, (int, float)) else "n/a"
-    return quality_val, quality_text, "fresh fetch ({} q={}; next refresh in {}h)".format(
-        quality_text or "n/a", q_str, SUNSETHUE_REFRESH_SEC // 3600)
+    n_events = sum(len(v) for v in days.values())
+    return days, "fresh fetch ({} days, {} events; next refresh in {}h)".format(
+        len(days), n_events, SUNSETHUE_REFRESH_SEC // 3600)
 
 
 def build_launch_fields(now, launches):
@@ -1032,19 +1069,32 @@ def build_payload():
             p["set"] = fmt_time(sunset[1])
             p["sunset_x"] = _iso_to_curve_x(sunset[1])
 
+        wind_max_arr = daily.get("wind_speed_10m_max", [])
+        wind_dir_arr = daily.get("wind_direction_10m_dominant", [])
+
         forecast_days = []
         for i in range(2, 5):
             if i < len(temp_max) and i < len(time_arr):
                 d_hi = temp_max[i]
+                wcode = wcodes[i] if i < len(wcodes) else None
+                d_pop = pop[i] if i < len(pop) and isinstance(pop[i], (int, float)) else None
+                d_uv = uv_max[i] if i < len(uv_max) and isinstance(uv_max[i], (int, float)) else None
+                d_wind_spd = wind_max_arr[i] if i < len(wind_max_arr) and isinstance(wind_max_arr[i], (int, float)) else None
+                d_wind_dir = wind_dir_arr[i] if i < len(wind_dir_arr) and isinstance(wind_dir_arr[i], (int, float)) else None
                 delta_str = ""
                 if isinstance(d_hi, (int, float)) and isinstance(today_hi, (int, float)):
                     delta_str = fmt_delta(round(d_hi) - round(today_hi))
                 forecast_days.append({
                     "day": day_label(time_arr[i]),
-                    "icon": wmo_to_icon(wcodes[i] if i < len(wcodes) else None),
+                    "icon": wmo_to_icon(wcode),
+                    "phrase": wmo_to_phrase(wcode),
                     "hi": safe_round(d_hi),
                     "lo": safe_round(temp_min[i]),
                     "delta": delta_str,
+                    "precip": "{}% rain".format(round(d_pop)) if d_pop is not None else "",
+                    "uv": "UV {}".format(round(d_uv)) if d_uv is not None else "",
+                    "wind": ("{} mph {}".format(round(d_wind_spd), cardinal(d_wind_dir)).strip()
+                             if d_wind_spd is not None else ""),
                 })
         p["forecast"] = forecast_days
 
@@ -1052,23 +1102,31 @@ def build_payload():
             p["hi"], p["lo"], p["phrase"], p["feels"],
             p["wind"], p["rise"], p["set"], len(forecast_days)))
 
-    # ===== Sunsethue (sunrise + sunset quality forecast) =====
-    for event_type, slot, time_field in (
-        ("sunrise", "sunrise_quality", "rise"),
-        ("sunset", "sunset_quality", "set"),
-    ):
-        _step_req("Sunsethue {}".format(event_type),
-                  "GET api.sunsethue.com/event?type={} — ({:.3f},{:.3f}) today".format(
-                      event_type, SUNSETHUE_LAT, SUNSETHUE_LON))
-        q_val, q_text, qsource = fetch_sun_quality(now, event_type)
-        if isinstance(q_val, (int, float)):
-            p[slot] = "{}%".format(round(q_val * 100))
-        qmsg = "{} • shows '{}' next to {} ({})".format(
-            qsource, p[slot] or "—", p[time_field], q_text or "n/a")
-        if "failed" in qsource:
-            _step_fail(qmsg)
-        else:
-            _step_ok(qmsg)
+    # ===== Sunsethue (sunrise + sunset quality, today + 3-day forecast) =====
+    # One /forecast call returns events for today plus the next 2 days. Today's
+    # values populate the conditions strip; the per-day forecast quality is
+    # merged into each forecast card later.
+    _step_req("Sunsethue",
+              "GET api.sunsethue.com/forecast?days=3 — sunrise+sunset for ({:.3f},{:.3f})".format(
+                  SUNSETHUE_LAT, SUNSETHUE_LON))
+    sun_data, qsource = fetch_sun_quality_all(now)
+    today_sun = sun_data.get(today_str, {})
+    today_rise = today_sun.get("sunrise", {})
+    today_set = today_sun.get("sunset", {})
+    if isinstance(today_rise.get("quality"), (int, float)):
+        p["sunrise_quality"] = "{}%".format(round(today_rise["quality"] * 100))
+    if isinstance(today_set.get("quality"), (int, float)):
+        p["sunset_quality"] = "{}%".format(round(today_set["quality"] * 100))
+    qmsg = "{} • today rise={}/{} set={}/{}".format(
+        qsource,
+        p["sunrise_quality"] or "—",
+        today_rise.get("quality_text") or "n/a",
+        p["sunset_quality"] or "—",
+        today_set.get("quality_text") or "n/a")
+    if "failed" in qsource:
+        _step_fail(qmsg)
+    else:
+        _step_ok(qmsg)
 
     # ===== Open-Meteo Marine =====
     _step_req("Open-Meteo Marine",
@@ -1077,6 +1135,8 @@ def build_payload():
     marine, err = fetch_json(MARINE_URL)
     om_now_sst = None  # OM's prediction for the current hour — for calibration
     sst_by_hour = {}
+    sst_by_day_hi = {}  # local-date -> max hourly SST (used for delta calc)
+    sst_by_day_lo = {}  # local-date -> min hourly SST
     swell_by_hour = {}  # 'YYYY-MM-DDTHH:00' -> (height_ft, period_s)
     if not marine:
         _step_fail("HTTP failed: {}".format(err or "no data"))
@@ -1085,16 +1145,19 @@ def build_payload():
         m_hourly = marine.get("hourly", {})
 
         # Index hourly SST by ISO timestamp so we can look up the current hour;
-        # also build per-day max for the forecast cards.
-        sst_by_day = {}
+        # also build per-day hi and lo for the forecast cards. The Marine API
+        # returns hourly SST in local TZ; the daily hi/lo are the max/min
+        # of the 24 hourly samples for that local date.
         for ts, t in zip(m_hourly.get("time", []),
                           m_hourly.get("sea_surface_temperature", [])):
             if t is None or "T" not in ts:
                 continue
             sst_by_hour[ts] = t
             d = ts.split("T")[0]
-            if d not in sst_by_day or t > sst_by_day[d]:
-                sst_by_day[d] = t
+            if d not in sst_by_day_hi or t > sst_by_day_hi[d]:
+                sst_by_day_hi[d] = t
+            if d not in sst_by_day_lo or t < sst_by_day_lo[d]:
+                sst_by_day_lo[d] = t
 
         for ts, h, t_s in zip(m_hourly.get("time", []),
                                m_hourly.get("swell_wave_height", []),
@@ -1106,27 +1169,32 @@ def build_payload():
         now_hour_key = now.strftime("%Y-%m-%dT%H:00")
         om_now_sst = sst_by_hour.get(now_hour_key)
 
-        om_today_sst = sst_by_day.get(today_str)
+        om_today_sst = sst_by_day_hi.get(today_str)
         if om_today_sst is not None:
             p["ocean"] = round(om_today_sst)
 
         m_time = m_daily.get("time", [])
         sh_arr = m_daily.get("swell_wave_height_max", [])
         st_arr = m_daily.get("swell_wave_period_max", [])
+        sd_arr = m_daily.get("swell_wave_direction_dominant", [])
         ocean_fc = []
         for i in range(1, 4):
             if i < len(sh_arr) and i < len(st_arr) and i < len(m_time):
                 h = sh_arr[i]
                 t = st_arr[i]
                 date = m_time[i]
+                swell_dir = sd_arr[i] if i < len(sd_arr) else None
                 if isinstance(h, (int, float)) and isinstance(t, (int, float)):
                     h_m_i = h * 0.3048
                     kj_i = round(1.96 * h_m_i * h_m_i * t * t)
-                    day_temp = sst_by_day.get(date)
+                    day_hi = sst_by_day_hi.get(date)
+                    day_lo = sst_by_day_lo.get(date)
                     ocean_fc.append({
                         "day": day_label(date),
-                        "ocean": round(day_temp) if day_temp is not None else "--",
+                        "ocean_hi": round(day_hi) if day_hi is not None else "--",
+                        "ocean_lo": round(day_lo) if day_lo is not None else "--",
                         "swell": "{}ft {}s".format(round(h), round(t)),
+                        "swell_arrow": direction_arrow(swell_dir),
                         "energy": "{} kJ".format(kj_i),
                         "energy_tier": energy_tier(kj_i),
                     })
@@ -1185,10 +1253,25 @@ def build_payload():
             fallback_real=real_now, fallback_om=om_now_sst,
         )
         for day in p["ocean_forecast"]:
-            if isinstance(day.get("ocean"), (int, float)):
-                day["ocean"] = round(day["ocean"] + delta)
+            if isinstance(day.get("ocean_hi"), (int, float)):
+                day["ocean_hi"] = round(day["ocean_hi"] + delta)
+            if isinstance(day.get("ocean_lo"), (int, float)):
+                day["ocean_lo"] = round(day["ocean_lo"] + delta)
         _step_ok("delta={:+.2f}°F applied to forecast (n={} paired hours)".format(
             delta, n_pairs))
+
+    # Per-day ocean delta vs today's calibrated max. Delta is calibration-
+    # invariant (same δ added on both sides), so we can compute from raw
+    # values and the result matches the displayed (calibrated) numbers.
+    today_om_hi = sst_by_day_hi.get(today_str)
+    today_om_hi_cal = (round(today_om_hi + delta)
+                       if isinstance(today_om_hi, (int, float)) else None)
+    for day in p["ocean_forecast"]:
+        if (isinstance(day.get("ocean_hi"), (int, float))
+                and today_om_hi_cal is not None):
+            day["ocean_delta"] = fmt_delta(day["ocean_hi"] - today_om_hi_cal)
+        else:
+            day["ocean_delta"] = ""
 
     # ===== Today's water-temp curve =====
     _step_req("Build today's water-temp curve",
@@ -1282,6 +1365,48 @@ def build_payload():
         else:
             _step_ok("no upcoming events • {} markers today".format(
                 len(today_tides)))
+
+    # ===== Merge air + ocean forecast into a single per-day card array =====
+    # The template renders one combined block per day (day name → AIR block
+    # → OCEAN block), so we zip the two parallel arrays by index and look up
+    # the matching Sunsethue sunrise/sunset quality by local date. After this
+    # step `ocean_forecast` is dropped from the payload — saves ~250 bytes
+    # against the 2 KB merge_variables cap.
+    #
+    # Forecast index i corresponds to today + (i+1) days (tomorrow at i=0).
+    n = max(len(p["forecast"]), len(p["ocean_forecast"]))
+    combined = []
+    for i in range(n):
+        air = p["forecast"][i] if i < len(p["forecast"]) else {}
+        sea = p["ocean_forecast"][i] if i < len(p["ocean_forecast"]) else {}
+        day_date = (now.date() + timedelta(days=i + 1)).isoformat()
+        sun_day = sun_data.get(day_date, {})
+        rise_q = sun_day.get("sunrise", {}).get("quality")
+        set_q = sun_day.get("sunset", {}).get("quality")
+        combined.append({
+            "day": air.get("day") or sea.get("day", "---"),
+            "icon": air.get("icon", "cloud"),
+            "phrase": air.get("phrase", ""),
+            "hi": air.get("hi", "--"),
+            "lo": air.get("lo", "--"),
+            "delta": air.get("delta", ""),
+            "precip": air.get("precip", ""),
+            "uv": air.get("uv", ""),
+            "wind": air.get("wind", ""),
+            "sunrise_q": ("{}%".format(round(rise_q * 100))
+                          if isinstance(rise_q, (int, float)) else ""),
+            "sunset_q": ("{}%".format(round(set_q * 100))
+                         if isinstance(set_q, (int, float)) else ""),
+            "ocean_hi": sea.get("ocean_hi", "--"),
+            "ocean_lo": sea.get("ocean_lo", "--"),
+            "ocean_delta": sea.get("ocean_delta", ""),
+            "swell": sea.get("swell", ""),
+            "swell_arrow": sea.get("swell_arrow", ""),
+            "energy": sea.get("energy", ""),
+            "energy_tier": sea.get("energy_tier", 0),
+        })
+    p["forecast"] = combined
+    p.pop("ocean_forecast", None)
 
     return {"merge_variables": p}
 

@@ -107,70 +107,142 @@
     border-bottom: 1px solid #ccc;
     padding-bottom: 3px;
   }
-  .forecast-rows, .ocean-rows {
+  .day-cards {
+    flex: 1;
+    display: flex;
+    justify-content: space-around;
+    align-items: stretch;
+    gap: 4px;
+    min-height: 0;
+  }
+  .day-card {
     flex: 1;
     display: flex;
     flex-direction: column;
-    justify-content: space-around;
+    align-items: center;
+    justify-content: space-between;
+    text-align: center;
+    gap: 4px;
+    min-width: 0;
+    padding: 8px 4px 10px;
+    line-height: 1;
   }
-  .forecast-row, .ocean-row {
+  .day-card + .day-card {
+    border-left: 1px dashed #ccc;
+  }
+  .day-card .day-name {
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.8px;
+    margin-bottom: 1px;
+  }
+  .day-card .card-section {
     display: flex;
     align-items: center;
-    font-size: 14px;
-    gap: 8px;
-  }
-  .forecast-row .day, .ocean-row .day {
-    flex: 0 0 36px;
+    width: 86%;
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
     font-weight: 700;
-    letter-spacing: 0.5px;
+    opacity: 0.45;
+    gap: 6px;
+    margin: 4px 0 1px;
   }
-  .forecast-row .mini-icon {
-    flex: 0 0 24px;
-    height: 24px;
+  .day-card .card-section::before,
+  .day-card .card-section::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #ccc;
+  }
+  .day-card .day-icon {
+    height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
   }
-  .forecast-row .mini-icon svg { width: 24px; height: 24px; }
-  .forecast-row .temps {
-    flex: 1;
-    text-align: right;
-    font-weight: 600;
-    letter-spacing: -0.3px;
+  .day-card .day-icon svg { width: 28px; height: 28px; }
+  .day-card .card-temps-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 5px;
   }
-  .forecast-row .temps .lo { opacity: 0.5; }
-  .forecast-row .delta {
-    flex: 0 0 auto;
+  .day-card .card-temps {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }
+  .day-card .card-temps .sep { opacity: 0.35; margin: 0 1px; font-weight: 500; }
+  .day-card .card-temps .lo { opacity: 0.5; }
+  .day-card .card-delta {
     font-size: 11px;
     font-weight: 700;
     opacity: 0.55;
     letter-spacing: -0.3px;
-    min-width: 30px;
-    text-align: right;
   }
-  .ocean-row .ocean-temp {
-    flex: 0 0 40px;
+  .day-card .card-phrase,
+  .day-card .card-conditions,
+  .day-card .card-wind {
+    font-size: 11px;
     font-weight: 600;
-    letter-spacing: -0.3px;
+    opacity: 0.7;
+    letter-spacing: -0.2px;
   }
-  .ocean-row .swell {
-    flex: 1;
-    font-weight: 600;
-  }
-  .ocean-row .energy-bar {
-    flex: 0 0 28px;
-    height: 16px;
+  .day-card .card-conditions .sep { opacity: 0.4; margin: 0 3px; }
+  .day-card .card-sun-row {
     display: flex;
     align-items: center;
-  }
-  .ocean-row .energy-bar svg { width: 28px; height: 16px; }
-  .ocean-row .energy {
-    flex: 0 0 auto;
+    justify-content: center;
+    gap: 10px;
     font-size: 11px;
     font-weight: 700;
+    letter-spacing: -0.2px;
+  }
+  .day-card .card-sun-row .sun-event {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .day-card .card-sun-row .sun-icon {
+    display: inline-flex;
+    width: 18px;
+    height: 12px;
+  }
+  .day-card .card-sun-row .sun-icon svg {
+    width: 18px;
+    height: 12px;
+  }
+  .day-card .card-ocean-temp {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }
+  .day-card .card-ocean-temp .sep { opacity: 0.35; margin: 0 1px; font-weight: 500; }
+  .day-card .card-ocean-temp .lo { opacity: 0.5; }
+  .day-card .card-swell {
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.85;
+  }
+  .day-card .card-swell .swell-arrow {
+    display: inline-block;
+    margin-left: 4px;
+    font-weight: 700;
+    opacity: 0.65;
+  }
+  .day-card .card-wave {
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .day-card .card-wave svg { width: 36px; height: 14px; }
+  .day-card .card-energy {
+    font-size: 11px;
+    font-weight: 700;
+    opacity: 0.7;
     letter-spacing: -0.3px;
-    min-width: 50px;
-    text-align: right;
   }
   .conditions {
     border-top: 2px solid #000;
@@ -423,6 +495,10 @@
 {% comment %} ===== Rocket icon for launch info ===== {% endcomment %}
 {% capture svg_rocket %}<svg viewBox="-6 -8 12 16" xmlns="http://www.w3.org/2000/svg" fill="black"><path d="M0 -7 L2 -3.5 L2 3 L-2 3 L-2 -3.5 Z"/><path d="M-2 0 L-4 4 L-2 4 Z"/><path d="M2 0 L4 4 L2 4 Z"/><path d="M-1.3 4 L0 7 L1.3 4 Z"/></svg>{% endcapture %}
 
+{% comment %} ===== Sunrise / sunset icons for the per-day forecast cards ===== {% endcomment %}
+{% capture svg_sunrise %}<svg viewBox="0 0 18 12" xmlns="http://www.w3.org/2000/svg" fill="black"><circle cx="5" cy="6" r="2"/><rect x="4.5" y="0" width="1" height="2"/><rect x="4.5" y="10" width="1" height="2"/><rect x="0" y="5.5" width="2" height="1"/><rect x="8" y="5.5" width="2" height="1"/><path d="M14 0 L17 3 L15 3 L15 8 L13 8 L13 3 L11 3 Z"/></svg>{% endcapture %}
+{% capture svg_sunset %}<svg viewBox="0 0 18 12" xmlns="http://www.w3.org/2000/svg" fill="black"><circle cx="5" cy="6" r="2"/><rect x="4.5" y="0" width="1" height="2"/><rect x="4.5" y="10" width="1" height="2"/><rect x="0" y="5.5" width="2" height="1"/><rect x="8" y="5.5" width="2" height="1"/><path d="M14 8 L11 5 L13 5 L13 0 L15 0 L15 5 L17 5 Z"/></svg>{% endcapture %}
+
 <div class="screen">
   <div class="top">
     <div class="hero">
@@ -462,11 +538,11 @@
     <div class="right-col">
       <div class="col-section">
         <div class="col-section-label">3-Day Forecast</div>
-        <div class="forecast-rows">
+        <div class="day-cards">
           {% for d in forecast %}
-          <div class="forecast-row">
-            <span class="day">{{ d.day }}</span>
-            <span class="mini-icon">
+          <div class="day-card">
+            <div class="day-name">{{ d.day }}</div>
+            <div class="day-icon">
               {% case d.icon %}
                 {% when 'sun' %}{{ svg_sun }}
                 {% when 'sun-cloud' %}{{ svg_suncloud }}
@@ -478,24 +554,36 @@
                 {% when 'storm' %}{{ svg_storm }}
                 {% else %}{{ svg_cloud }}
               {% endcase %}
-            </span>
-            <span class="temps">{{ d.hi }}&deg; <span class="lo">{{ d.lo }}&deg;</span></span>
-            <span class="delta">{{ d.delta }}</span>
-          </div>
-          {% endfor %}
-        </div>
-      </div>
-
-      <div class="col-section">
-        <div class="col-section-label">Ocean Forecast</div>
-        <div class="ocean-rows">
-          {% for o in ocean_forecast %}
-          <div class="ocean-row">
-            <span class="day">{{ o.day }}</span>
-            <span class="ocean-temp">{{ o.ocean }}&deg;F</span>
-            <span class="swell">{{ o.swell }}</span>
-            <span class="energy-bar">
-              {% case o.energy_tier %}
+            </div>
+            <div class="card-phrase">{{ d.phrase }}</div>
+            <div class="card-temps-row">
+              <span class="card-temps">{{ d.hi }}&deg;<span class="sep">/</span><span class="lo">{{ d.lo }}&deg;</span></span>
+              <span class="card-delta">{{ d.delta }}</span>
+            </div>
+            <div class="card-conditions">{{ d.precip }}{% if d.precip and d.uv %}<span class="sep">&middot;</span>{% endif %}{{ d.uv }}</div>
+            <div class="card-wind">{{ d.wind }}</div>
+            <div class="card-sun-row">
+              {% if d.sunrise_q %}
+              <span class="sun-event">
+                <span class="sun-icon">{{ svg_sunrise }}</span>
+                <span>{{ d.sunrise_q }}</span>
+              </span>
+              {% endif %}
+              {% if d.sunset_q %}
+              <span class="sun-event">
+                <span class="sun-icon">{{ svg_sunset }}</span>
+                <span>{{ d.sunset_q }}</span>
+              </span>
+              {% endif %}
+            </div>
+            <div class="card-section">Ocean</div>
+            <div class="card-temps-row">
+              <span class="card-ocean-temp">{{ d.ocean_hi }}&deg;<span class="sep">/</span><span class="lo">{{ d.ocean_lo }}&deg;</span></span>
+              <span class="card-delta">{{ d.ocean_delta }}</span>
+            </div>
+            <div class="card-swell">{{ d.swell }}{% if d.swell_arrow %}<span class="swell-arrow">{{ d.swell_arrow }}</span>{% endif %}</div>
+            <div class="card-wave">
+              {% case d.energy_tier %}
                 {% when 1 %}{{ wave_1 }}
                 {% when 2 %}{{ wave_2 }}
                 {% when 3 %}{{ wave_3 }}
@@ -503,8 +591,8 @@
                 {% when 5 %}{{ wave_5 }}
                 {% else %}{{ wave_0 }}
               {% endcase %}
-            </span>
-            <span class="energy">{{ o.energy }}</span>
+            </div>
+            <div class="card-energy">{{ d.energy }}</div>
           </div>
           {% endfor %}
         </div>
