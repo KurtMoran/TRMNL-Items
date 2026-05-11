@@ -733,12 +733,15 @@ def fetch_sun_quality_all(now):
         except ValueError:
             fetched_at = None
 
+    # `len(days) >= 4` invalidates earlier-version caches that only stored 3
+    # days. Without this, a stale 3-day cache would suppress the refetch we
+    # need to fill in the third forecast card's quality data.
     cache_fresh = (
         cache.get("date_key") == today_key
         and fetched_at is not None
         and (now - fetched_at).total_seconds() < SUNSETHUE_REFRESH_SEC
         and isinstance(cache.get("days"), dict)
-        and cache["days"]
+        and len(cache["days"]) >= 4
     )
     if cache_fresh:
         age = int((now - fetched_at).total_seconds())
@@ -750,9 +753,14 @@ def fetch_sun_quality_all(now):
     # date when filtering by `days`.
     utc_offset_hours = datetime.now().astimezone().utcoffset().total_seconds() / 3600
 
+    # days=4 covers today plus the next 3 future dates (Sunsethue's "days" is
+    # inclusive of the request date). The forecast cards need today + 3 future
+    # days; without this we'd miss the third forecast day's quality data.
+    # Cost: 8 events × 5 credits = 40 credits per fetch × 4 fetches/day = 160
+    # credits/day — still well under any free-tier quota.
     url = (
         "https://api.sunsethue.com/forecast"
-        "?latitude={lat}&longitude={lon}&days=3&type=both&timezone={tz}"
+        "?latitude={lat}&longitude={lon}&days=4&type=both&timezone={tz}"
     ).format(lat=SUNSETHUE_LAT, lon=SUNSETHUE_LON, tz=utc_offset_hours)
     try:
         resp = requests.get(url, timeout=15,
