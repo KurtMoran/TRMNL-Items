@@ -119,6 +119,25 @@ ICON_SHORT = {
 }
 
 
+# WMO drizzle codes (51-57). Open-Meteo classifies coastal marine-layer mist
+# under these codes even when `precipitation_probability_max` is 0% — common
+# in SD's "May gray" / "June gloom." Without a reclass, the card shows a rain
+# icon + "Light drizzle" + "0% rain" which reads contradictory.
+DRIZZLE_CODES = {51, 53, 55, 56, 57}
+
+
+def wmo_resolve(wcode, precip_pct):
+    """Returns (icon_key, phrase) with a marine-layer override: when the WMO
+    code says drizzle but the precip-probability for the day is 0%, swap to
+    a fog icon labeled "Mist" — that's what's actually happening outside.
+    Everything else falls through to the standard mapping."""
+    is_drizzle = isinstance(wcode, (int, float)) and int(wcode) in DRIZZLE_CODES
+    no_precip = isinstance(precip_pct, (int, float)) and precip_pct == 0
+    if is_drizzle and no_precip:
+        return "fog", "Mist"
+    return wmo_to_icon(wcode), wmo_to_phrase(wcode)
+
+
 def wmo_to_phrase(code):
     if code is None:
         return ""
@@ -1087,8 +1106,8 @@ def build_payload():
 
             p["hi"] = safe_round(today_hi)
             p["lo"] = safe_round(today_lo)
-            p["icon"] = wmo_to_icon(today_code)
-            p["phrase"] = wmo_to_phrase(today_code)
+            today_pop = pop[1] if len(pop) > 1 and isinstance(pop[1], (int, float)) else None
+            p["icon"], p["phrase"] = wmo_resolve(today_code, today_pop)
 
             if isinstance(yest_hi, (int, float)) and isinstance(today_hi, (int, float)):
                 delta_y = round(today_hi) - round(yest_hi)
@@ -1147,10 +1166,11 @@ def build_payload():
                 delta_str = ""
                 if isinstance(d_hi, (int, float)) and isinstance(today_hi, (int, float)):
                     delta_str = fmt_delta(round(d_hi) - round(today_hi))
+                icon, phrase = wmo_resolve(wcode, d_pop)
                 forecast_days.append({
                     "day": day_label(time_arr[i]),
-                    "icon": wmo_to_icon(wcode),
-                    "phrase": wmo_to_phrase(wcode),
+                    "icon": icon,
+                    "phrase": phrase,
                     "hi": safe_round(d_hi),
                     "lo": safe_round(temp_min[i]),
                     "delta": delta_str,
