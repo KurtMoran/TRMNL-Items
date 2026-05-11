@@ -541,49 +541,49 @@
         <div class="day-cards">
           {% for d in forecast %}
           <div class="day-card">
-            <div class="day-name">{{ d.day }}</div>
+            <div class="day-name">{{ d.d }}</div>
             <div class="day-icon">
-              {% case d.icon %}
-                {% when 'sun' %}{{ svg_sun }}
-                {% when 'sun-cloud' %}{{ svg_suncloud }}
-                {% when 'partly-cloudy' %}{{ svg_partly }}
-                {% when 'cloud' %}{{ svg_cloud }}
-                {% when 'fog' %}{{ svg_fog }}
-                {% when 'rain' %}{{ svg_rain }}
-                {% when 'snow' %}{{ svg_snow }}
-                {% when 'storm' %}{{ svg_storm }}
+              {% case d.i %}
+                {% when 's' %}{{ svg_sun }}
+                {% when 'sc' %}{{ svg_suncloud }}
+                {% when 'pc' %}{{ svg_partly }}
+                {% when 'c' %}{{ svg_cloud }}
+                {% when 'f' %}{{ svg_fog }}
+                {% when 'r' %}{{ svg_rain }}
+                {% when 'sn' %}{{ svg_snow }}
+                {% when 'st' %}{{ svg_storm }}
                 {% else %}{{ svg_cloud }}
               {% endcase %}
             </div>
-            <div class="card-phrase">{{ d.phrase }}</div>
+            <div class="card-phrase">{{ d.p }}</div>
             <div class="card-temps-row">
-              <span class="card-temps">{{ d.hi }}&deg;<span class="sep">/</span><span class="lo">{{ d.lo }}&deg;</span></span>
-              <span class="card-delta">{{ d.delta }}</span>
+              <span class="card-temps">{{ d.h }}&deg;<span class="sep">/</span><span class="lo">{{ d.l }}&deg;</span></span>
+              <span class="card-delta">{{ d.dl }}</span>
             </div>
-            <div class="card-conditions">{{ d.precip }}{% if d.precip and d.uv %}<span class="sep">&middot;</span>{% endif %}{{ d.uv }}</div>
-            <div class="card-wind">{{ d.wind }}</div>
+            <div class="card-conditions">{% if d.pp != blank %}{{ d.pp }}% rain{% endif %}{% if d.pp != blank and d.uv != blank %}<span class="sep">&middot;</span>{% endif %}{% if d.uv != blank %}UV {{ d.uv }}{% endif %}</div>
+            <div class="card-wind">{{ d.w }}</div>
             <div class="card-sun-row">
-              {% if d.sunrise_q %}
+              {% if d.sq != blank %}
               <span class="sun-event">
                 <span class="sun-icon">{{ svg_sunrise }}</span>
-                <span>{{ d.sunrise_q }}</span>
+                <span>{{ d.sq }}%</span>
               </span>
               {% endif %}
-              {% if d.sunset_q %}
+              {% if d.tq != blank %}
               <span class="sun-event">
                 <span class="sun-icon">{{ svg_sunset }}</span>
-                <span>{{ d.sunset_q }}</span>
+                <span>{{ d.tq }}%</span>
               </span>
               {% endif %}
             </div>
             <div class="card-section">Ocean</div>
             <div class="card-temps-row">
-              <span class="card-ocean-temp">{{ d.ocean_hi }}&deg;<span class="sep">/</span><span class="lo">{{ d.ocean_lo }}&deg;</span></span>
-              <span class="card-delta">{{ d.ocean_delta }}</span>
+              <span class="card-ocean-temp">{{ d.oh }}&deg;<span class="sep">/</span><span class="lo">{{ d.ol }}&deg;</span></span>
+              <span class="card-delta">{{ d.od }}</span>
             </div>
-            <div class="card-swell">{{ d.swell }}{% if d.swell_arrow %}<span class="swell-arrow">{{ d.swell_arrow }}</span>{% endif %}</div>
+            <div class="card-swell">{{ d.s }}{% if d.sa %}<span class="swell-arrow">{{ d.sa }}</span>{% endif %}</div>
             <div class="card-wave">
-              {% case d.energy_tier %}
+              {% case d.et %}
                 {% when 1 %}{{ wave_1 }}
                 {% when 2 %}{{ wave_2 }}
                 {% when 3 %}{{ wave_3 }}
@@ -592,7 +592,7 @@
                 {% else %}{{ wave_0 }}
               {% endcase %}
             </div>
-            <div class="card-energy">{{ d.energy }}</div>
+            <div class="card-energy">{{ d.e }} kJ</div>
           </div>
           {% endfor %}
         </div>

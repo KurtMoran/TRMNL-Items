@@ -110,6 +110,15 @@ def wmo_to_icon(code):
     return "cloud"
 
 
+# Compact icon codes for the forecast-card payload. The hero uses the long
+# form, but the cards repeat the key 3 times so we squeeze every byte we can
+# under TRMNL's 2 KB merge_variables cap.
+ICON_SHORT = {
+    "sun": "s", "sun-cloud": "sc", "partly-cloudy": "pc", "cloud": "c",
+    "fog": "f", "rain": "r", "snow": "sn", "storm": "st",
+}
+
+
 def wmo_to_phrase(code):
     if code is None:
         return ""
@@ -905,8 +914,17 @@ def build_today_curve(now, real_hourly, om_hourly, delta, sunrise_x=None, sunset
         if om_at_anchor is not None:
             anchor_offset = real_hourly[anchor_hour] - (om_at_anchor + delta)
 
+    # Sample every 2 hours instead of every hour — halves the cubic-Bezier
+    # path string (~200-300 bytes saved against the 2 KB merge_variables cap).
+    # Visual impact on a 380px chart is minimal because Catmull-Rom smoothing
+    # interpolates between the sampled points. Always include the most recent
+    # observed hour (`cur_hour`) so the "now" dot anchors to measured data
+    # regardless of parity.
     series = {}
-    for k in range(24):
+    sample_hours = set(range(0, 24, 2))
+    if cur_hour in real_hourly:
+        sample_hours.add(cur_hour)
+    for k in sorted(sample_hours):
         if k <= cur_hour and k in real_hourly:
             series[k] = real_hourly[k]  # past/current — anchor in measured data
             continue
@@ -1091,8 +1109,8 @@ def build_payload():
                     "hi": safe_round(d_hi),
                     "lo": safe_round(temp_min[i]),
                     "delta": delta_str,
-                    "precip": "{}% rain".format(round(d_pop)) if d_pop is not None else "",
-                    "uv": "UV {}".format(round(d_uv)) if d_uv is not None else "",
+                    "precip_n": round(d_pop) if d_pop is not None else None,
+                    "uv_n": round(d_uv) if d_uv is not None else None,
                     "wind": ("{} mph {}".format(round(d_wind_spd), cardinal(d_wind_dir)).strip()
                              if d_wind_spd is not None else ""),
                 })
@@ -1195,7 +1213,7 @@ def build_payload():
                         "ocean_lo": round(day_lo) if day_lo is not None else "--",
                         "swell": "{}ft {}s".format(round(h), round(t)),
                         "swell_arrow": direction_arrow(swell_dir),
-                        "energy": "{} kJ".format(kj_i),
+                        "energy_n": kj_i,
                         "energy_tier": energy_tier(kj_i),
                     })
         p["ocean_forecast"] = ocean_fc
@@ -1374,6 +1392,10 @@ def build_payload():
     # against the 2 KB merge_variables cap.
     #
     # Forecast index i corresponds to today + (i+1) days (tomorrow at i=0).
+    # Aggressive field-name shortening (long-name → 1-2 chars) so the 3-card
+    # array fits under TRMNL's 2 KB merge_variables limit. Raw integers are
+    # emitted where possible — the template adds unit suffixes ("% rain",
+    # "UV ", "%", " kJ"). Saves ~400 bytes vs. the verbose payload.
     n = max(len(p["forecast"]), len(p["ocean_forecast"]))
     combined = []
     for i in range(n):
@@ -1383,27 +1405,27 @@ def build_payload():
         sun_day = sun_data.get(day_date, {})
         rise_q = sun_day.get("sunrise", {}).get("quality")
         set_q = sun_day.get("sunset", {}).get("quality")
+        rise_pct = round(rise_q * 100) if isinstance(rise_q, (int, float)) else None
+        set_pct = round(set_q * 100) if isinstance(set_q, (int, float)) else None
         combined.append({
-            "day": air.get("day") or sea.get("day", "---"),
-            "icon": air.get("icon", "cloud"),
-            "phrase": air.get("phrase", ""),
-            "hi": air.get("hi", "--"),
-            "lo": air.get("lo", "--"),
-            "delta": air.get("delta", ""),
-            "precip": air.get("precip", ""),
-            "uv": air.get("uv", ""),
-            "wind": air.get("wind", ""),
-            "sunrise_q": ("{}%".format(round(rise_q * 100))
-                          if isinstance(rise_q, (int, float)) else ""),
-            "sunset_q": ("{}%".format(round(set_q * 100))
-                         if isinstance(set_q, (int, float)) else ""),
-            "ocean_hi": sea.get("ocean_hi", "--"),
-            "ocean_lo": sea.get("ocean_lo", "--"),
-            "ocean_delta": sea.get("ocean_delta", ""),
-            "swell": sea.get("swell", ""),
-            "swell_arrow": sea.get("swell_arrow", ""),
-            "energy": sea.get("energy", ""),
-            "energy_tier": sea.get("energy_tier", 0),
+            "d": air.get("day") or sea.get("day", "---"),
+            "i": ICON_SHORT.get(air.get("icon", "cloud"), "c"),
+            "p": air.get("phrase", ""),
+            "h": air.get("hi", "--"),
+            "l": air.get("lo", "--"),
+            "dl": air.get("delta", ""),
+            "pp": air.get("precip_n"),
+            "uv": air.get("uv_n"),
+            "w": air.get("wind", ""),
+            "sq": rise_pct,
+            "tq": set_pct,
+            "oh": sea.get("ocean_hi", "--"),
+            "ol": sea.get("ocean_lo", "--"),
+            "od": sea.get("ocean_delta", ""),
+            "s": sea.get("swell", ""),
+            "sa": sea.get("swell_arrow", ""),
+            "e": sea.get("energy_n"),
+            "et": sea.get("energy_tier", 0),
         })
     p["forecast"] = combined
     p.pop("ocean_forecast", None)
@@ -1418,8 +1440,10 @@ def push_to_trmnl(payload):
         return
     url = "{}/{}".format(TRMNL_API_URL, TRMNL_WEBHOOK_UUID)
     # Compact separators (no spaces) — saves ~80 bytes vs default `(', ', ': ')`,
-    # critical headroom against TRMNL's 2 KB merge_variables limit.
-    body = json.dumps(payload, separators=(",", ":"))
+    # critical headroom against TRMNL's 2 KB merge_variables limit. ensure_ascii
+    # =False keeps non-ASCII (e.g. swell-direction arrows like ←) as raw 3-byte
+    # UTF-8 instead of 6-char `←` escapes — another ~30 bytes saved.
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     body_bytes = len(body)
     _step_req("TRMNL webhook",
               "POST {} — merge_variables ({} bytes)".format(_short_url(url), body_bytes))
