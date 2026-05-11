@@ -733,15 +733,22 @@ def fetch_sun_quality_all(now):
         except ValueError:
             fetched_at = None
 
-    # `len(days) >= 4` invalidates earlier-version caches that only stored 3
-    # days. Without this, a stale 3-day cache would suppress the refetch we
-    # need to fill in the third forecast card's quality data.
+    # Treat the cache as stale if any of the next-4 expected dates is missing
+    # a sunrise or sunset quality. This also self-migrates older 3-day caches
+    # and any caches saved before the average-fill logic landed — both would
+    # have gaps that the fresh-fetch + fill pass now resolves.
+    expected = [(now.date() + timedelta(days=i)).isoformat() for i in range(4)]
+    cache_days = cache.get("days") if isinstance(cache.get("days"), dict) else {}
+    cache_complete = all(
+        isinstance(cache_days.get(d, {}).get("sunrise", {}).get("quality"), (int, float))
+        and isinstance(cache_days.get(d, {}).get("sunset", {}).get("quality"), (int, float))
+        for d in expected
+    )
     cache_fresh = (
         cache.get("date_key") == today_key
         and fetched_at is not None
         and (now - fetched_at).total_seconds() < SUNSETHUE_REFRESH_SEC
-        and isinstance(cache.get("days"), dict)
-        and len(cache["days"]) >= 4
+        and cache_complete
     )
     if cache_fresh:
         age = int((now - fetched_at).total_seconds())
@@ -796,15 +803,45 @@ def fetch_sun_quality_all(now):
             "quality_text": event.get("quality_text", "") or "",
         }
 
+    # Average-fill missing sunrise/sunset slots within the 4-day window. The
+    # Sunsethue model's 78h horizon often leaves the last forecast day's
+    # sunset (the furthest event) without `model_data` for several hours per
+    # day. Rather than render a blank slot, fall back to the mean of the
+    # neighbouring days so the card always has a number. The fill is marked
+    # so the template can dim it.
+    real_events = 0
+    for d in days.values():
+        for ev in ("sunrise", "sunset"):
+            if isinstance(d.get(ev, {}).get("quality"), (int, float)):
+                real_events += 1
+
+    def _mean_quality(event_type):
+        vals = [d[event_type]["quality"] for d in days.values()
+                if isinstance(d.get(event_type, {}).get("quality"), (int, float))]
+        return sum(vals) / len(vals) if vals else None
+
+    avg_rise = _mean_quality("sunrise")
+    avg_set = _mean_quality("sunset")
+    filled = 0
+    for i in range(4):
+        date_key = (now.date() + timedelta(days=i)).isoformat()
+        day_entry = days.setdefault(date_key, {})
+        if not isinstance(day_entry.get("sunrise", {}).get("quality"), (int, float)) and avg_rise is not None:
+            day_entry["sunrise"] = {"quality": avg_rise, "quality_text": "", "estimated": True}
+            filled += 1
+        if not isinstance(day_entry.get("sunset", {}).get("quality"), (int, float)) and avg_set is not None:
+            day_entry["sunset"] = {"quality": avg_set, "quality_text": "", "estimated": True}
+            filled += 1
+
     _save_sunsethue_cache({
         "date_key": today_key,
         "fetched_at": now.isoformat(),
         "days": days,
     })
 
-    n_events = sum(len(v) for v in days.values())
-    return days, "fresh fetch ({} days, {} events; next refresh in {}h)".format(
-        len(days), n_events, SUNSETHUE_REFRESH_SEC // 3600)
+    fill_note = " ({} avg-filled)".format(filled) if filled else ""
+    return days, "fresh fetch ({} days, {} events{}; next refresh in {}h)".format(
+        len(days), real_events, fill_note, SUNSETHUE_REFRESH_SEC // 3600)
 
 
 def build_launch_fields(now, launches):
