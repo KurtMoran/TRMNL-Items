@@ -823,7 +823,7 @@ async def _call_gemini(session, user_text):
         "generationConfig": {
             "maxOutputTokens": 4096,
             "thinkingConfig": {
-                "thinkingLevel": "LOW",
+                "thinkingLevel": "MEDIUM",
             },
         },
     }
