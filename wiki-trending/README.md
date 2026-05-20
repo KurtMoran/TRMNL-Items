@@ -16,7 +16,7 @@ E-ink display showing Wikipedia articles that are trending well above their norm
 |-----|------|------|------|
 | Wikipedia APIs | None | Free | ~600 requests/cycle |
 | Google News RSS | None | Free | ~200 requests/cycle |
-| Google Gemini 2.5 Flash | API key | Free tier | 5 requests/cycle, 5s apart |
+| Google Gemini 3.5 Flash | API key | Free tier | 5 requests/cycle, 5s apart |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
 Runs every 6 hours (4 cycles/day).

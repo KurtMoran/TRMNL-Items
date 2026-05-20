@@ -814,17 +814,16 @@ async def _call_gemini(session, user_text):
     """Single Gemini call with system instruction + grounding. Returns text or ''."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-2.5-flash:generateContent?key={}"
+        "models/gemini-3.5-flash:generateContent?key={}"
     ).format(GEMINI_API_KEY)
     payload = {
         "system_instruction": {"parts": [{"text": GEMINI_SYSTEM_RULES}]},
         "contents": [{"parts": [{"text": user_text}]}],
         "tools": [{"google_search": {}}],
         "generationConfig": {
-            "temperature": 0.3,
             "maxOutputTokens": 4096,
             "thinkingConfig": {
-                "thinkingBudget": 2048,
+                "thinkingLevel": "LOW",
             },
         },
     }
@@ -913,7 +912,7 @@ async def enrich_with_reasons(trending):
     if not top:
         return
     _step_req("Gemini reasoning",
-              "POST generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent — system rules + Google Search grounding (×{}, 5s spacing)".format(len(top)))
+              "POST generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent — system rules + Google Search grounding (×{}, 5s spacing)".format(len(top)))
     started = time.monotonic()
     got_reason = 0
     async with aiohttp.ClientSession() as session:
