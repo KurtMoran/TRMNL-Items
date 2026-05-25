@@ -11,7 +11,7 @@
 #   FORCE_REBUILD=1 bash /mnt/user/appdata/TRMNL-Items/update.sh
 
 GEMINI_API_KEY="${GEMINI_API_KEY:?Set GEMINI_API_KEY}"
-AIRPORT_WEBHOOK_UUID="${AIRPORT_WEBHOOK_UUID:?Set AIRPORT_WEBHOOK_UUID}"
+# AIRPORT_WEBHOOK_UUID — airport-tracker archived (code kept, no longer deployed)
 WIKI_WEBHOOK_UUID="${WIKI_WEBHOOK_UUID:?Set WIKI_WEBHOOK_UUID}"
 WEATHER_WEBHOOK_UUID="${WEATHER_WEBHOOK_UUID:?Set WEATHER_WEBHOOK_UUID}"
 SUNSETHUE_API_KEY="${SUNSETHUE_API_KEY:?Set SUNSETHUE_API_KEY}"
@@ -56,23 +56,25 @@ needs_rebuild() {
     return 1
 }
 
-# --- Airport Tracker ---
-if needs_rebuild "airport-tracker" "airport-tracker"; then
-    echo "Rebuilding airport tracker..."
-    docker stop trmnl-items 2>/dev/null
-    docker rm trmnl-items 2>/dev/null
-    docker stop airport-tracker 2>/dev/null
-    docker rm airport-tracker 2>/dev/null
-    docker build --no-cache -t airport-tracker ./airport-tracker/
-    docker run -d --name airport-tracker --restart unless-stopped \
-        --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \
-        -e TZ=America/Los_Angeles \
-        -e TRMNL_WEBHOOK_UUID="$AIRPORT_WEBHOOK_UUID" \
-        -e POLL_INTERVAL_SEC=120 \
-        -e DATA_FILE=/data/tracker_state.json \
-        -v /mnt/user/appdata/TRMNL-Items/airport-tracker/data:/data \
-        airport-tracker
-fi
+# --- Airport Tracker (ARCHIVED) ---
+# No longer deployed. Code is kept in ./airport-tracker/ for future use.
+# To revive: uncomment this block and the AIRPORT_WEBHOOK_UUID line above.
+# if needs_rebuild "airport-tracker" "airport-tracker"; then
+#     echo "Rebuilding airport tracker..."
+#     docker stop trmnl-items 2>/dev/null
+#     docker rm trmnl-items 2>/dev/null
+#     docker stop airport-tracker 2>/dev/null
+#     docker rm airport-tracker 2>/dev/null
+#     docker build --no-cache -t airport-tracker ./airport-tracker/
+#     docker run -d --name airport-tracker --restart unless-stopped \
+#         --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \
+#         -e TZ=America/Los_Angeles \
+#         -e TRMNL_WEBHOOK_UUID="$AIRPORT_WEBHOOK_UUID" \
+#         -e POLL_INTERVAL_SEC=120 \
+#         -e DATA_FILE=/data/tracker_state.json \
+#         -v /mnt/user/appdata/TRMNL-Items/airport-tracker/data:/data \
+#         airport-tracker
+# fi
 
 # --- Wiki Trending ---
 if needs_rebuild "wiki-trending" "wiki-trending"; then
