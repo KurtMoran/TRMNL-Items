@@ -621,7 +621,7 @@ async def fetch_trending():
                 attempts.append("{} → {}".format(date, resp.status))
         if data is None:
             _step_fail("no top-pages data available in last 7 days ({})".format("; ".join(attempts)))
-            return []
+            return [], None
 
         top_pages = data["items"][0]["articles"]
         candidates = [p for p in top_pages if not should_skip(p["article"])][:PAGES_TO_CHECK]
@@ -730,7 +730,7 @@ async def fetch_trending():
             _step_info("{} of {} trending articles tagged with main-page feature".format(
                 wiki_featured_count, len(trending)))
 
-        return trending
+        return trending, date_used
 
 
 GEMINI_SYSTEM_RULES = """You are writing one-line descriptions for an e-ink display that shows Wikipedia articles with unusual traffic spikes.
@@ -910,7 +910,7 @@ async def enrich_with_reasons(trending):
     """Replace descriptions with AI-generated trending reasons for top articles."""
     top = trending[:DISPLAY_COUNT]
     if not top:
-        return
+        return 0
     _step_req("Gemini reasoning",
               "POST generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent — system rules + Google Search grounding (×{}, 5s spacing)".format(len(top)))
     started = time.monotonic()
@@ -948,6 +948,7 @@ async def enrich_with_reasons(trending):
             got_reason, len(top), len(top) - got_reason, elapsed))
     else:
         _step_fail("0/{} articles got descriptions ({:.1f}s)".format(len(top), elapsed))
+    return got_reason
 
 
 def build_trmnl_payload(trending):
@@ -1012,10 +1013,33 @@ def main():
     while True:
         _cycle_start()
         try:
-            trending = asyncio.run(fetch_trending())
+            prev_state = load_state()
+            trending, date_used = asyncio.run(fetch_trending())
 
+            # Gemini grounding costs money per call, so only run it when the
+            # Wikipedia data is actually new. date_used advances once a day when
+            # the prior day's pageviews publish; on unchanged data we reuse the
+            # cached AI descriptions for free. If grounding returns nothing
+            # (e.g. spend cap blocked it), we leave enriched_date untouched so
+            # the next cycle retries automatically.
+            enriched_date = prev_state.get("enriched_date")
             if trending and GEMINI_API_KEY:
-                asyncio.run(enrich_with_reasons(trending))
+                if date_used and date_used != enriched_date:
+                    got = asyncio.run(enrich_with_reasons(trending))
+                    if got:
+                        enriched_date = date_used
+                else:
+                    cached = {a["article"]: a.get("desc", "")
+                              for a in prev_state.get("articles", [])}
+                    reused = 0
+                    for a in trending:
+                        c = cached.get(a["article"])
+                        if c:
+                            a["desc"] = c
+                            reused += 1
+                    _step_info("data unchanged (date={}) - skipped Gemini "
+                               "grounding, reused {} cached descriptions".format(
+                                   date_used, reused))
 
             if trending:
                 _step_info("top {} trending (final ranking):".format(min(10, len(trending))))
@@ -1025,7 +1049,8 @@ def main():
                         i, a["article"], a["mult"], format_views(a["views"]),
                         desc[:80]))
 
-            state = {"last_fetch": datetime.now().isoformat(), "articles": trending}
+            state = {"last_fetch": datetime.now().isoformat(),
+                     "enriched_date": enriched_date, "articles": trending}
             save_state(state)
 
             payload = build_trmnl_payload(trending)

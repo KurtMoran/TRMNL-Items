@@ -16,10 +16,10 @@ E-ink display showing Wikipedia articles that are trending well above their norm
 |-----|------|------|------|
 | Wikipedia APIs | None | Free | ~600 requests/cycle |
 | Google News RSS | None | Free | ~200 requests/cycle |
-| Google Gemini 3.5 Flash | API key | Free tier | 5 requests/cycle, 5s apart |
+| Google Gemini 3.5 Flash | API key | Search grounding billed per query | ~5 requests/day (only when Wikipedia data changes) |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
-Runs every 6 hours (4 cycles/day).
+Runs every 6 hours (4 cycles/day), but the paid Gemini grounding only runs when the Wikipedia pageview date advances (≈once/day) — other cycles reuse the cached AI descriptions.
 
 ## Setup
 
