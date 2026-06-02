@@ -51,6 +51,20 @@ SKIP_EXACT = {
     "XHamster", "Pornhub", "XNXX", "XXX",
 }
 
+# Wikipedia main-page sections whose articles trend *because* Wikipedia
+# showcased them, not from organic interest. Articles tagged with one of these
+# feature kinds are dropped from the trending ranking entirely (their slots get
+# filled by the next genuine trends). "news" (In the News) is intentionally NOT
+# in the default set — those articles trend for real reasons and the feature is
+# a consequence, not the cause. Override with a comma-separated env var.
+# Valid kinds: tfa (Today's Featured Article), dyk (Did You Know),
+# onthisday (On This Day), news (In the News).
+SKIP_WIKI_FEATURE_KINDS = {
+    k.strip() for k in os.getenv(
+        "SKIP_WIKI_FEATURE_KINDS", "tfa,dyk,onthisday"
+    ).split(",") if k.strip()
+}
+
 
 def should_skip(title):
     if title in SKIP_EXACT:
@@ -288,6 +302,51 @@ async def get_description(session, article):
     return ""
 
 
+async def get_dyk_articles(session):
+    """Return the set of articles recently featured in the main page's
+    'Did You Know' section.
+
+    DYK is NOT part of the featured feed used for TFA / On This Day, so we
+    reconstruct it from the revision history of Template:Did_you_know. Each
+    daily rotation is an edit (usually by DYKUpdateBot) whose wikitext bolds
+    the target article as '''[[Article]]'''. We union the bolded targets from
+    revisions in the last few days so a set that already rotated off the main
+    page is still caught — yesterday's pageviews (what we score) can be driven
+    by a set posted up to a couple days earlier. False positives are
+    effectively impossible: DYK articles have near-zero organic baselines, so a
+    genuine trend won't collide with a recent DYK target.
+    """
+    url = "https://en.wikipedia.org/w/api.php"
+    params = {
+        "action": "query", "format": "json", "prop": "revisions",
+        "titles": "Template:Did_you_know", "rvlimit": "10",
+        "rvprop": "content|timestamp", "rvslots": "main",
+    }
+    cutoff = datetime.now(timezone.utc) - timedelta(days=3)
+    targets = set()
+    try:
+        async with session.get(url, params=params, headers={"User-Agent": USER_AGENT}) as resp:
+            if resp.status != 200:
+                return targets
+            data = await resp.json()
+            page = next(iter(data["query"]["pages"].values()))
+            for rev in page.get("revisions", []):
+                ts = rev.get("timestamp", "")
+                try:
+                    when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    when = None
+                if when is not None and when < cutoff:
+                    continue
+                content = rev.get("slots", {}).get("main", {}).get("*", "")
+                # DYK hooks bold the target link: '''[[Article]]''' / '''[[Article|label]]'''
+                for m in re.findall(r"'''\[\[([^\]|]+)", content):
+                    targets.add(m.strip().replace("_", " "))
+    except Exception as e:
+        log.debug("DYK fetch failed: %s", e)
+    return targets
+
+
 async def get_wiki_featured(session):
     """Fetch Wikipedia's main page featured content for yesterday (UTC)."""
     yesterday = datetime.now(timezone.utc) - timedelta(days=1)
@@ -313,19 +372,32 @@ async def get_wiki_featured(session):
                         featured["onthisday"].append(page.get("normalizedtitle", ""))
     except Exception as e:
         log.debug("Featured content fetch failed: %s", e)
+    # DYK comes from a separate source (it isn't in the featured feed above).
+    featured["dyk"] = sorted(await get_dyk_articles(session))
     return featured
 
 
 def check_wiki_feature(article_name, featured):
-    """Check if an article was featured on Wikipedia's main page."""
+    """Check if an article was featured on Wikipedia's main page.
+
+    Returns (kind, reason): kind is one of "tfa", "dyk", "news", "onthisday"
+    (or "" if not featured), used to decide whether to drop the article; reason
+    is the human-readable description used for Gemini context and logging.
+
+    "news" is checked before "onthisday" so a genuinely newsworthy article that
+    also happens to fall on an anniversary is kept (classified as news), not
+    dropped as On This Day.
+    """
     name = article_name.replace("_", " ")
     if name == featured.get("tfa", ""):
-        return "Featured as Wikipedia's 'Today's Featured Article'"
+        return "tfa", "Featured as Wikipedia's 'Today's Featured Article'"
+    if name in featured.get("dyk", []):
+        return "dyk", "Featured on Wikipedia's main page in the 'Did You Know' section"
     if name in featured.get("news", []):
-        return "Featured in Wikipedia's 'In the News' section"
+        return "news", "Featured in Wikipedia's 'In the News' section"
     if name in featured.get("onthisday", []):
-        return "Featured in Wikipedia's 'On This Day' section"
-    return ""
+        return "onthisday", "Featured in Wikipedia's 'On This Day' section"
+    return "", ""
 
 
 async def get_news_headline(session, article):
@@ -634,14 +706,16 @@ async def fetch_trending():
         feat_endpoint = "api.wikimedia.org/feed/v1/wikipedia/en/featured/{}/{:02d}/{:02d}".format(
             feat_yest.year, feat_yest.month, feat_yest.day)
         _step_req("Wikipedia Featured Content",
-                  "GET {} — TFA + In the News + On This Day for yesterday".format(feat_endpoint))
+                  "GET {} — TFA + In the News + On This Day for yesterday; "
+                  "DYK from Template:Did_you_know revision history".format(feat_endpoint))
         featured = await get_wiki_featured(session)
         tfa = featured.get("tfa", "")
         n_news = len(featured.get("news", []))
         n_otd = len(featured.get("onthisday", []))
-        if tfa or n_news or n_otd:
-            _step_ok("TFA: {} • {} news links • {} on-this-day links".format(
-                tfa or "—", n_news, n_otd))
+        n_dyk = len(featured.get("dyk", []))
+        if tfa or n_news or n_otd or n_dyk:
+            _step_ok("TFA: {} • {} news links • {} on-this-day links • {} DYK targets".format(
+                tfa or "—", n_news, n_otd, n_dyk))
         else:
             _step_fail("no featured content returned (HTTP failure or empty response)")
 
@@ -696,6 +770,37 @@ async def fetch_trending():
 
         trending.sort(key=lambda x: -x["mult"])
 
+        # Tag articles that were featured on Wikipedia's main page, then drop
+        # the ones whose traffic is feature-driven rather than organic (TFA /
+        # DYK / On This Day by default — see SKIP_WIKI_FEATURE_KINDS). This runs
+        # BEFORE enrichment so we never spend enrichment/Gemini calls on an
+        # article we're about to discard; the freed top-N slots fall through to
+        # the next genuine trends.
+        wiki_featured_count = 0
+        kept = []
+        dropped = []
+        for article in trending:
+            kind, reason = check_wiki_feature(article["article"], featured)
+            article["wiki_feature"] = reason
+            article["wiki_feature_kind"] = kind
+            if reason:
+                wiki_featured_count += 1
+                _step_info("wiki feature: {} [{}] — {}".format(
+                    article["article"], kind, reason))
+            if kind in SKIP_WIKI_FEATURE_KINDS:
+                dropped.append(article)
+            else:
+                kept.append(article)
+        if wiki_featured_count:
+            _step_info("{} of {} trending articles tagged with main-page feature".format(
+                wiki_featured_count, len(trending)))
+        if dropped:
+            _step_info("dropped {} feature-driven article(s) from ranking ({}): {}".format(
+                len(dropped), ",".join(sorted(SKIP_WIKI_FEATURE_KINDS)),
+                ", ".join("{} [{}]".format(a["article"], a["wiki_feature_kind"])
+                          for a in dropped[:8])))
+        trending = kept
+
         # ===== Enrichment (top N) =====
         to_enrich = trending[:DISPLAY_COUNT]
         if to_enrich:
@@ -717,18 +822,6 @@ async def fetch_trending():
             else:
                 _step_ok("{} articles enriched ({:.1f}s)".format(
                     len(to_enrich), enrich_elapsed))
-
-        # Tag articles that were featured on Wikipedia's main page
-        wiki_featured_count = 0
-        for article in trending:
-            feature = check_wiki_feature(article["article"], featured)
-            article["wiki_feature"] = feature
-            if feature:
-                wiki_featured_count += 1
-                _step_info("wiki feature: {} — {}".format(article["article"], feature))
-        if wiki_featured_count:
-            _step_info("{} of {} trending articles tagged with main-page feature".format(
-                wiki_featured_count, len(trending)))
 
         return trending, date_used
 

@@ -6,9 +6,12 @@ E-ink display showing Wikipedia articles that are trending well above their norm
 
 1. Fetches yesterday's top 200 Wikipedia pages (by pageviews)
 2. Compares each to its 7-day average — articles above 3x are "trending"
-3. For the top 5, asks Google Gemini (with web search) to explain *why* it's trending
-4. Falls back to Google News headlines, then Wikipedia intro if Gemini is unavailable
-5. Pushes results to a TRMNL e-ink display via webhook
+3. Drops articles that only trended because Wikipedia showcased them on the main page — Today's Featured Article, Did You Know, and On This Day (configurable). In the News articles are kept, since those trend for genuine reasons. The freed slots fall through to the next organic trends.
+4. For the top 5, asks Google Gemini (with web search) to explain *why* it's trending
+5. Falls back to Google News headlines, then Wikipedia intro if Gemini is unavailable
+6. Pushes results to a TRMNL e-ink display via webhook
+
+> **Why this matters:** Wikipedia's main page links drive huge traffic to whatever it features, so a freshly-promoted Did You Know stub can outrank a genuine news spike purely because it sat on the front page. Today's Featured Article and On This Day work the same way. Those aren't "trending" in any interesting sense, so they're filtered out. TFA and On This Day come from Wikipedia's [featured feed](https://api.wikimedia.org/feed/v1/wikipedia/en/featured); Did You Know isn't in that feed, so it's reconstructed from the bolded targets in the recent revision history of `Template:Did_you_know`.
 
 ## APIs used
 
@@ -62,6 +65,7 @@ docker run -d \
 | `TZ` | No | Timezone for display timestamps (default: UTC) |
 | `POLL_INTERVAL_SEC` | No | Seconds between cycles (default: 21600 = 6 hours) |
 | `DATA_FILE` | No | State file path (default: /data/wiki_state.json) |
+| `SKIP_WIKI_FEATURE_KINDS` | No | Comma-separated main-page feature kinds to drop from the ranking. Default `tfa,dyk,onthisday`. Valid: `tfa` (Today's Featured Article), `dyk` (Did You Know), `onthisday` (On This Day), `news` (In the News). Set empty to keep all. |
 
 ## Files
 
