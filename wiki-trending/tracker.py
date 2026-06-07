@@ -302,27 +302,35 @@ async def get_description(session, article):
     return ""
 
 
-async def get_dyk_articles(session):
-    """Return the set of articles recently featured in the main page's
-    'Did You Know' section.
+async def get_dyk_articles(session, ref_dt=None):
+    """Return the set of articles featured in the main page's 'Did You Know'
+    section on/around the analyzed day.
 
     DYK is NOT part of the featured feed used for TFA / On This Day, so we
     reconstruct it from the revision history of Template:Did_you_know. Each
-    daily rotation is an edit (usually by DYKUpdateBot) whose wikitext bolds
-    the target article as '''[[Article]]'''. We union the bolded targets from
-    revisions in the last few days so a set that already rotated off the main
-    page is still caught — yesterday's pageviews (what we score) can be driven
-    by a set posted up to a couple days earlier. False positives are
-    effectively impossible: DYK articles have near-zero organic baselines, so a
-    genuine trend won't collide with a recent DYK target.
+    rotation is an edit (usually by DYKUpdateBot) whose wikitext bolds the
+    target article as '''[[Article]]'''. DYK rotates 1-2×/day, so we union the
+    bolded targets from the rotations visible during the analyzed day — the
+    revisions dated that day plus the day before (a back-buffer for twice-daily
+    rotations / boundary effects). We deliberately do NOT look forward: a set
+    posted after the analyzed day can't have driven its traffic, and skipping
+    it avoids dropping an article that trended organically and only later
+    became a DYK. False positives are effectively impossible anyway — DYK
+    articles have near-zero organic baselines.
+
+    ref_dt is the analyzed pageview day (UTC midnight); defaults to yesterday.
     """
+    if ref_dt is None:
+        now = datetime.now(timezone.utc)
+        ref_dt = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=1)
+    lo = ref_dt - timedelta(days=1)
+    hi = ref_dt + timedelta(days=1)
     url = "https://en.wikipedia.org/w/api.php"
     params = {
         "action": "query", "format": "json", "prop": "revisions",
-        "titles": "Template:Did_you_know", "rvlimit": "10",
+        "titles": "Template:Did_you_know", "rvlimit": "12",
         "rvprop": "content|timestamp", "rvslots": "main",
     }
-    cutoff = datetime.now(timezone.utc) - timedelta(days=3)
     targets = set()
     try:
         async with session.get(url, params=params, headers={"User-Agent": USER_AGENT}) as resp:
@@ -336,7 +344,7 @@ async def get_dyk_articles(session):
                     when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 except ValueError:
                     when = None
-                if when is not None and when < cutoff:
+                if when is not None and not (lo <= when < hi):
                     continue
                 content = rev.get("slots", {}).get("main", {}).get("*", "")
                 # DYK hooks bold the target link: '''[[Article]]''' / '''[[Article|label]]'''
@@ -347,11 +355,22 @@ async def get_dyk_articles(session):
     return targets
 
 
-async def get_wiki_featured(session):
-    """Fetch Wikipedia's main page featured content for yesterday (UTC)."""
-    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+async def get_wiki_featured(session, date_used=None):
+    """Fetch Wikipedia's main page featured content for the analyzed day.
+
+    date_used is the 'YYYY/MM/DD' of the pageview data we're scoring. Wikimedia
+    publishes top-pages with a 1-2 day lag, so this is usually NOT 'yesterday'
+    — and the featured content must line up with the SAME day as the traffic,
+    or TFA / On This Day won't match the spike and real features slip through.
+    """
+    if date_used:
+        y, m, d = (int(x) for x in date_used.split("/"))
+        ref_dt = datetime(y, m, d, tzinfo=timezone.utc)
+    else:
+        now = datetime.now(timezone.utc)
+        ref_dt = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=1)
     url = "https://api.wikimedia.org/feed/v1/wikipedia/en/featured/{}/{:02d}/{:02d}".format(
-        yesterday.year, yesterday.month, yesterday.day,
+        ref_dt.year, ref_dt.month, ref_dt.day,
     )
     featured = {"tfa": "", "news": [], "onthisday": [], "dyk": []}
     try:
@@ -372,8 +391,9 @@ async def get_wiki_featured(session):
                         featured["onthisday"].append(page.get("normalizedtitle", ""))
     except Exception as e:
         log.debug("Featured content fetch failed: %s", e)
-    # DYK comes from a separate source (it isn't in the featured feed above).
-    featured["dyk"] = sorted(await get_dyk_articles(session))
+    # DYK comes from a separate source (it isn't in the featured feed above),
+    # aligned to the same analyzed day.
+    featured["dyk"] = sorted(await get_dyk_articles(session, ref_dt))
     return featured
 
 
@@ -701,14 +721,14 @@ async def fetch_trending():
         _step_ok("date={}, {} articles returned, {} candidates after filter{}".format(
             date_used, len(top_pages), len(candidates), skipped_note))
 
-        # ===== Wikipedia Featured Content =====
-        feat_yest = datetime.now(timezone.utc) - timedelta(days=1)
-        feat_endpoint = "api.wikimedia.org/feed/v1/wikipedia/en/featured/{}/{:02d}/{:02d}".format(
-            feat_yest.year, feat_yest.month, feat_yest.day)
+        # ===== Wikipedia Featured Content (aligned to date_used, NOT a fixed
+        # "yesterday" — pageviews lag 1-2 days, so the feature must match the
+        # same day as the traffic or real features slip through) =====
+        feat_endpoint = "api.wikimedia.org/feed/v1/wikipedia/en/featured/{}".format(date_used)
         _step_req("Wikipedia Featured Content",
-                  "GET {} — TFA + In the News + On This Day for yesterday; "
+                  "GET {} — TFA + In the News + On This Day for the analyzed day; "
                   "DYK from Template:Did_you_know revision history".format(feat_endpoint))
-        featured = await get_wiki_featured(session)
+        featured = await get_wiki_featured(session, date_used)
         tfa = featured.get("tfa", "")
         n_news = len(featured.get("news", []))
         n_otd = len(featured.get("onthisday", []))
@@ -843,7 +863,7 @@ Use these clues together to determine the cause. For example:
 - Spiking across multiple languages = global news event
 - Anniversary date from Wikidata matching today = anniversary-driven traffic
 - High-upvote Reddit post = Reddit-driven traffic
-- Gradual rise + heavy desktop = news article or Wikipedia feature
+- Gradual rise + heavy desktop = news coverage or organic search interest
 
 CRITICAL rules for your response:
 - Required format: "<what it is> — <why it's spiking>". The em dash (—) is MANDATORY and must separate the two parts.
@@ -852,7 +872,8 @@ CRITICAL rules for your response:
 - Respond with ONLY one sentence. Nothing else.
 - Be specific: include names, dates, scores, outcomes when relevant.
 - Keep it under 150 characters if possible. Hard cap 200.
-- If the cause is genuinely unclear, infer the most likely driver from the data (e.g. "featured on Wikipedia main page", "Reddit-driven interest", "anniversary of a notable event", "gradual organic search interest"). NEVER bail out by paraphrasing the Wikipedia intro. NEVER say the cause is unclear or unknown.
+- Do NOT say the article was "featured on Wikipedia's main page", or was a "Today's Featured Article", "Did You Know", or "On This Day" entry. Those are filtered out before they ever reach you, so a Wikipedia main-page feature is NEVER the cause here — find the real EXTERNAL reason. The ONLY exception: if the provided context explicitly states the article is in the "In the News" section, you may reference that.
+- If the cause is genuinely unclear, infer the most likely external driver from the data (e.g. "went viral on Reddit", "shared widely on social media", "recent news coverage", "anniversary of a notable event", "gradual organic search interest"). NEVER bail out by paraphrasing the Wikipedia intro. NEVER say the cause is unclear or unknown.
 
 EXAMPLES — format is "what it is — why it's spiking". Use an em dash to separate.
 
@@ -864,16 +885,16 @@ EXAMPLES — format is "what it is — why it's spiking". Use an em dash to sepa
   GOOD: 'Lava field in New Mexico — featured in a NASA Science article about its 40-mile flow.'
   BAD: 'A volcanic field in central New Mexico covering 330 square miles.'
 
-  Article: Dacre railway station
-  GOOD: "Closed station in Cumbria, England — featured on Wikipedia's main page as a Did You Know entry."
-  BAD: 'The Dacre railway station article is experiencing a traffic spike because...'
+  Article: Duncan Forbes, 3rd of Culloden
+  GOOD: "Scottish judge and politician — his family's tax-exempt Ferintosh whisky distillery went viral on Reddit."
+  BAD: "17th-century Scottish politician — featured on Wikipedia's main page."
 
   Article: Warren Zevon
   GOOD: 'Werewolves of London singer — would have turned 79 today.'
   BAD: 'An American rock singer and songwriter known for Werewolves of London.'
 
   Article: 330 West 42nd Street
-  GOOD: "Manhattan Art Deco skyscraper, the McGraw-Hill Building — featured on Wikipedia's main page Did You Know section."
+  GOOD: 'Manhattan Art Deco skyscraper, the McGraw-Hill Building — resurfaced through a viral architecture thread on social media.'
   BAD: 'The article is about 330 West 42nd Street, also known as the McGraw-Hill Building, a 485-foot-tall skyscraper...'"""
 
 
@@ -887,9 +908,27 @@ _BANNED_PREFIXES = (
     "this is an article about",
 )
 
+# Phrases that attribute the spike to a Wikipedia main-page feature. Real
+# features (TFA / DYK / On This Day) are filtered out before enrichment, so if
+# Gemini still claims one for an article we didn't tag as featured, it's a
+# hallucination — we reject it and fall back to a factual description.
+_MAINPAGE_PHRASE_RE = re.compile(
+    r"main[\s\-]?page|front[\s\-]?page|today'?s featured article|did you know|\bDYK\b",
+    re.IGNORECASE,
+)
 
-def _validate_reason(text):
-    """Return error string if the reason fails our format rules, else ''."""
+
+def _claims_mainpage_feature(text):
+    return bool(text) and bool(_MAINPAGE_PHRASE_RE.search(text))
+
+
+def _validate_reason(text, allow_mainpage=False):
+    """Return error string if the reason fails our format rules, else ''.
+
+    allow_mainpage: only True for articles we actually tagged as a main-page
+    feature (i.e. kept In-the-News items). For everything else, a "featured on
+    Wikipedia's main page" style claim is a hallucination and gets rejected.
+    """
     if not text:
         return "empty response"
     stripped = text.lstrip("'\"").lower()
@@ -900,6 +939,10 @@ def _validate_reason(text):
         return "missing em dash"
     if len(text) > 250:
         return "too long ({} chars)".format(len(text))
+    if not allow_mainpage and _claims_mainpage_feature(text):
+        return ("falsely claims a Wikipedia main-page feature (this article was "
+                "NOT featured — give the real external cause, e.g. a viral "
+                "Reddit/social post, news coverage, or search interest)")
     return ""
 
 
@@ -976,8 +1019,12 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
         "{context}"
     ).format(name=name, mult=mult, context=context)
 
+    # Only articles we actually tagged as a main-page feature (kept In-the-News
+    # items) may mention one; for everything else such a claim is hallucinated.
+    allow_mainpage = bool(wiki_feature)
+
     text = await _call_gemini(session, user_text)
-    err = _validate_reason(text)
+    err = _validate_reason(text, allow_mainpage=allow_mainpage)
     if err:
         log.info("Gemini retry for %s (%s): %r", article_name, err, text[:120])
         retry_text = (
@@ -989,12 +1036,16 @@ async def get_trending_reason(session, article_name, mult, wiki_desc="",
             "or any other meta-phrase."
         ).format(user_text=user_text, err=err)
         retry = await _call_gemini(session, retry_text)
-        retry_err = _validate_reason(retry)
+        retry_err = _validate_reason(retry, allow_mainpage=allow_mainpage)
         if retry_err:
             log.warning("Gemini retry still invalid for %s (%s): %r",
                         article_name, retry_err, retry[:120])
-            # Return the better of the two if we have anything; else empty.
-            return retry or text
+            best = retry or text
+            # Never surface a hallucinated main-page claim: drop to the factual
+            # fallback (news headline / Wikipedia intro) chosen in enrichment.
+            if not allow_mainpage and _claims_mainpage_feature(best):
+                return ""
+            return best
         return retry
     return text
 
