@@ -7,11 +7,14 @@ E-ink display showing Wikipedia articles that are trending well above their norm
 1. Fetches yesterday's top 200 Wikipedia pages (by pageviews)
 2. Compares each to its 7-day average — articles above 3x are "trending"
 3. Drops articles that only trended because Wikipedia showcased them on the main page — Today's Featured Article, Did You Know, and On This Day (configurable). In the News articles are kept, since those trend for genuine reasons. The freed slots fall through to the next organic trends.
-4. For the top 5, asks Google Gemini (with web search) to explain *why* it's trending
-5. Falls back to Google News headlines, then Wikipedia intro if Gemini is unavailable
-6. Pushes results to a TRMNL e-ink display via webhook
+4. Drops articles about people who died in the last 30 days (configurable), plus the "Deaths in 2026" list page itself — obituaries would otherwise fill the top slots most days. Deaths are detected from Wikipedia's "Deaths in <Month> <Year>" lists and the article's Wikidata date of death, so no AI call is needed.
+5. For the top 5, asks Google Gemini (with web search) to explain *why* it's trending
+6. Falls back to Google News headlines, then Wikipedia intro if Gemini is unavailable
+7. Pushes results to a TRMNL e-ink display via webhook
 
 > **Why this matters:** Wikipedia's main page links drive huge traffic to whatever it features, so a freshly-promoted Did You Know stub can outrank a genuine news spike purely because it sat on the front page. Today's Featured Article and On This Day work the same way. Those aren't "trending" in any interesting sense, so they're filtered out. TFA and On This Day come from Wikipedia's [featured feed](https://api.wikimedia.org/feed/v1/wikipedia/en/featured); Did You Know isn't in that feed, so it's reconstructed from the bolded targets in the recent revision history of `Template:Did_you_know`.
+>
+> Recent deaths are the other big source of noise: an obituary reliably sends an article to tens or hundreds of times its baseline, so without a filter the display is mostly a list of who died. The deaths-list check covers every trending article in one request; the top-ranked survivors also get a per-article Wikidata check in case the list lags a fresh death or links a redirect title.
 
 ## APIs used
 
@@ -19,7 +22,7 @@ E-ink display showing Wikipedia articles that are trending well above their norm
 |-----|------|------|------|
 | Wikipedia APIs | None | Free | ~600 requests/cycle |
 | Google News RSS | None | Free | ~200 requests/cycle |
-| Google Gemini 3.5 Flash | API key | Search grounding billed per query | ~5 requests/day (only when Wikipedia data changes) |
+| Google Gemini 3.8 Flash (`gemini-3.8-flash`) | API key | Search grounding billed per query | ~5 requests/day (only when Wikipedia data changes) |
 | TRMNL Webhook | Plugin UUID | Included with TRMNL | 1 push/cycle |
 
 Runs every 6 hours (4 cycles/day), but the paid Gemini grounding only runs when the Wikipedia pageview date advances (≈once/day) — other cycles reuse the cached AI descriptions.
@@ -62,10 +65,12 @@ docker run -d \
 |----------|----------|-------------|
 | `TRMNL_WEBHOOK_UUID` | Yes | From your TRMNL private plugin |
 | `GEMINI_API_KEY` | No | Enables AI-generated "why trending" descriptions |
+| `GEMINI_MODEL` | No | Gemini model for those descriptions (default: `gemini-3.8-flash`). Needs Google Search grounding + thinking levels, i.e. any Gemini 3.x Flash. |
 | `TZ` | No | Timezone for display timestamps (default: UTC) |
 | `POLL_INTERVAL_SEC` | No | Seconds between cycles (default: 21600 = 6 hours) |
 | `DATA_FILE` | No | State file path (default: /data/wiki_state.json) |
 | `SKIP_WIKI_FEATURE_KINDS` | No | Comma-separated main-page feature kinds to drop from the ranking. Default `tfa,dyk,onthisday`. Valid: `tfa` (Today's Featured Article), `dyk` (Did You Know), `onthisday` (On This Day), `news` (In the News). Set empty to keep all. |
+| `SKIP_RECENT_DEATHS_DAYS` | No | Drop articles about people who died within this many days of the analyzed pageview day, plus the "Deaths in <year>" list pages. Default `30`. Set `0` to disable. |
 
 ## Files
 

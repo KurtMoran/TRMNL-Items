@@ -29,6 +29,10 @@ TRMNL_WEBHOOK_UUID = os.getenv("TRMNL_WEBHOOK_UUID", "")
 TRMNL_API_URL = "https://trmnl.com/api/custom_plugins"
 DATA_FILE = os.getenv("DATA_FILE", "/data/wiki_state.json")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Gemini model for the "why is it trending" descriptions. Needs Google Search
+# grounding + thinking levels (any Gemini 3.x Flash). Override to pin or try
+# another model without a code change.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 # Wikimedia rate-limits the per-article endpoint at roughly 8-9 req/s sustained
 # (empirically: 500 unthrottled requests trigger ~60 429s starting at iter ~400).
 # 150ms = 6.6 req/s gives a safety margin while only adding ~50s to a 500-page cycle.
@@ -65,6 +69,23 @@ SKIP_WIKI_FEATURE_KINDS = {
     ).split(",") if k.strip()
 }
 
+# Articles about people who just died trend for exactly one reason — the
+# obituary — and on most days they would fill every top slot. Anyone whose
+# date of death falls within this many days before the analyzed pageview day
+# is dropped from the ranking (the freed slots fall through to the next
+# genuine trends), as are Wikipedia's "Deaths in <year>" list pages. Deaths
+# are detected from Wikipedia's "Deaths in <Month> <Year>" lists plus the
+# article's Wikidata date of death (P570). Set to 0 to disable.
+SKIP_RECENT_DEATHS_DAYS = int(os.getenv("SKIP_RECENT_DEATHS_DAYS", "30"))
+# The deaths-list check covers every trending article in one request; the
+# per-article Wikidata check (catches list lag and redirect-title mismatches)
+# only runs for the top-ranked survivors that could actually reach the display.
+DEATH_CHECK_DEPTH = DISPLAY_COUNT * 3
+
+# "Deaths in 2026" / "Deaths in September 2026" list pages spike whenever a
+# famous person dies — pure obituary traffic, dropped with the death filter.
+_DEATHS_LIST_TITLE_RE = re.compile(r"^Deaths_in_")
+
 
 def should_skip(title):
     if title in SKIP_EXACT:
@@ -72,6 +93,8 @@ def should_skip(title):
     for prefix in SKIP_PREFIXES:
         if title.startswith(prefix):
             return True
+    if SKIP_RECENT_DEATHS_DAYS > 0 and _DEATHS_LIST_TITLE_RE.match(title):
+        return True
     return False
 
 
@@ -420,6 +443,127 @@ def check_wiki_feature(article_name, featured):
     return "", ""
 
 
+def _analyzed_day(date_used=None):
+    """UTC midnight of the pageview day being scored ('YYYY/MM/DD'); defaults
+    to yesterday when the top-pages date isn't known."""
+    if date_used:
+        y, m, d = (int(x) for x in date_used.split("/"))
+        return datetime(y, m, d, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=1)
+
+
+def _wiki_title_key(title):
+    """Normalize an article title for matching: underscores → spaces, first
+    letter upper-cased (Wikipedia's first character is case-insensitive and
+    the pageviews API returns DB keys such as 'IPhone')."""
+    t = title.replace("_", " ").strip()
+    return t[:1].upper() + t[1:]
+
+
+_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December",
+)
+# '==September==' on the yearly page, '==August 2026==' on a monthly page.
+_DEATHS_MONTH_HEADING_RE = re.compile(r"^==\s*([A-Za-z]+)(?:\s+(\d{4}))?\s*==\s*$")
+_DEATHS_DAY_HEADING_RE = re.compile(r"^===\s*(\d{1,2})\s*===\s*$")
+# '*[[Name]], 85, ...' / '* [[Name (actor)|Name]], ...' / '**[[Name]]' (nested
+# under a group event such as a plane crash). '*{{ill|...}}' entries have no
+# English article and are ignored; so are the '*[https://...]' external links.
+_DEATHS_ENTRY_RE = re.compile(r"^\*+\s*(?:'{2,3})?\s*\[\[([^\]|#]+)")
+
+
+def _parse_deaths_wikitext(content, page_title):
+    """Parse a 'Deaths in <Month> <Year>' / 'Deaths in <Year>' page into
+    {normalized article title: date of death}.
+
+    Layout: level-2 month headings, '===15===' day headings, then one
+    '*[[Name]], age, nationality, ...' bullet per person under the day they
+    died. Non-month level-2 sections (References, Previous months, ...) reset
+    the context so their bullets are never read as deaths.
+    """
+    deaths = {}
+    m = re.search(r"(\d{4})", page_title)
+    title_year = int(m.group(1)) if m else None
+    content = re.sub(r"<!--.*?-->", "", content, flags=re.S)
+    month = year = day = None
+    for line in content.splitlines():
+        line = line.rstrip()
+        if line.startswith("==") and not line.startswith("==="):
+            mh = _DEATHS_MONTH_HEADING_RE.match(line)
+            name = mh.group(1).capitalize() if mh else ""
+            if name in _MONTH_NAMES:
+                month = _MONTH_NAMES.index(name) + 1
+                year = int(mh.group(2)) if mh.group(2) else title_year
+            else:
+                month = year = None
+            day = None
+            continue
+        dh = _DEATHS_DAY_HEADING_RE.match(line)
+        if dh:
+            day = int(dh.group(1))
+            continue
+        if month is None or year is None or day is None:
+            continue
+        me = _DEATHS_ENTRY_RE.match(line)
+        if not me:
+            continue
+        try:
+            when = datetime(year, month, day, tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        deaths.setdefault(_wiki_title_key(me.group(1)), when)
+    return deaths
+
+
+async def get_recent_deaths(session, date_used=None, window_days=None):
+    """People on Wikipedia's 'Deaths in <Month> <Year>' lists who died within
+    window_days before the analyzed pageview day.
+
+    Returns (deaths, titles): deaths is {normalized article title: date of
+    death} — or None if the fetch failed — and titles are the list pages that
+    were requested. The current month normally lives on the yearly
+    'Deaths in <Year>' page (the monthly title redirects there) and is split
+    into its own page later; redirects=1 follows either layout and the parser
+    handles both.
+    """
+    if window_days is None:
+        window_days = SKIP_RECENT_DEATHS_DAYS
+    ref_dt = _analyzed_day(date_used)
+    cutoff = ref_dt - timedelta(days=window_days)
+    titles = []
+    y, m = cutoff.year, cutoff.month
+    while (y, m) <= (ref_dt.year, ref_dt.month):
+        titles.append("Deaths in {} {}".format(_MONTH_NAMES[m - 1], y))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    url = "https://en.wikipedia.org/w/api.php"
+    params = {
+        "action": "query", "format": "json", "formatversion": "2",
+        "prop": "revisions", "rvprop": "content", "rvslots": "main",
+        "titles": "|".join(titles), "redirects": "1",
+    }
+    deaths = {}
+    try:
+        async with session.get(url, params=params, headers={"User-Agent": USER_AGENT}) as resp:
+            if resp.status != 200:
+                log.warning("Deaths list fetch returned HTTP %d", resp.status)
+                return None, titles
+            data = await resp.json()
+            for page in data.get("query", {}).get("pages", []):
+                revs = page.get("revisions", [])
+                if not revs:
+                    continue
+                content = revs[0].get("slots", {}).get("main", {}).get("content", "")
+                for name, when in _parse_deaths_wikitext(content, page.get("title", "")).items():
+                    if when >= cutoff:
+                        deaths.setdefault(name, when)
+    except Exception as e:
+        log.warning("Deaths list fetch failed: %s", e)
+        return None, titles
+    return deaths, titles
+
+
 async def get_news_headline(session, article):
     """Fetch the most recent news headline from Google News RSS."""
     search_term = article.replace("_", " ")
@@ -533,9 +677,14 @@ async def get_multilang_spike(session, article):
     return ""
 
 
-async def get_wikidata_info(session, article):
-    """Get structured data from Wikidata (dates, type) to help identify anniversaries."""
-    # Resolve Wikipedia article to Wikidata entity
+async def _wikidata_claims(session, article, props):
+    """Resolve a Wikipedia article to its Wikidata item and return its claims
+    for the requested property IDs ({} if there is no item or a request fails).
+
+    wbgetclaims filters by at most ONE property server-side (a 'P1|P2' list is
+    rejected), so a single property is fetched filtered — a tiny response —
+    and several are fetched unfiltered and narrowed here.
+    """
     url = "https://en.wikipedia.org/w/api.php"
     params = {
         "action": "query", "format": "json", "prop": "pageprops",
@@ -544,32 +693,74 @@ async def get_wikidata_info(session, article):
     try:
         async with session.get(url, params=params, headers={"User-Agent": USER_AGENT}) as resp:
             if resp.status != 200:
-                return ""
+                return {}
             data = await resp.json()
             page = next(iter(data["query"]["pages"].values()))
             qid = page.get("pageprops", {}).get("wikibase_item", "")
             if not qid:
-                return ""
+                return {}
     except Exception as e:
         log.debug("Wikidata resolve failed for %s: %s", article, e)
-        return ""
+        return {}
 
-    # Fetch key properties from Wikidata
     wd_url = "https://www.wikidata.org/w/api.php"
-    params = {
-        "action": "wbgetclaims", "format": "json", "entity": qid,
-        # P31=instance of, P569=birth, P570=death, P571=inception,
-        # P576=dissolved, P585=point in time, P580=start time
-        "property": "P31|P569|P570|P571|P576|P585|P580",
-    }
+    params = {"action": "wbgetclaims", "format": "json", "entity": qid}
+    if len(props) == 1:
+        params["property"] = props[0]
     try:
         async with session.get(wd_url, params=params, headers={"User-Agent": USER_AGENT}) as resp:
             if resp.status != 200:
-                return ""
+                return {}
             data = await resp.json()
+            if "error" in data:
+                log.debug("Wikidata claims error for %s: %s",
+                          article, data["error"].get("info", ""))
+                return {}
             claims = data.get("claims", {})
+            return {p: claims[p] for p in props if p in claims}
     except Exception as e:
         log.debug("Wikidata claims failed for %s: %s", article, e)
+        return {}
+
+
+def _wikidata_time(tv):
+    """'+2026-09-15T00:00:00Z' → UTC datetime, or None when the date is
+    imprecise (month/day unknown) or unparsable."""
+    try:
+        year, month, day = int(tv[1:5]), int(tv[6:8]), int(tv[9:11])
+        if month == 0 or day == 0:
+            return None
+        return datetime(year, month, day, tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+async def get_wikidata_death_date(session, article):
+    """Date of death (P570) from Wikidata, or None if the subject is alive,
+    isn't a person, or the date is unknown/imprecise."""
+    dates = []
+    claims = await _wikidata_claims(session, article, ["P570"])
+    for claim in claims.get("P570", []):
+        if claim.get("rank") == "deprecated":
+            continue
+        try:
+            when = _wikidata_time(claim["mainsnak"]["datavalue"]["value"]["time"])
+        except (KeyError, TypeError):
+            continue
+        if when is not None:
+            dates.append(when)
+    return max(dates) if dates else None
+
+
+async def get_wikidata_info(session, article):
+    """Get structured data from Wikidata (dates, type) to help identify anniversaries."""
+    claims = await _wikidata_claims(
+        session, article,
+        # P31=instance of, P569=birth, P570=death, P571=inception,
+        # P576=dissolved, P585=point in time, P580=start time
+        ["P31", "P569", "P570", "P571", "P576", "P585", "P580"],
+    )
+    if not claims:
         return ""
 
     today = datetime.now(timezone.utc)
@@ -821,6 +1012,63 @@ async def fetch_trending():
                           for a in dropped[:8])))
         trending = kept
 
+        # ===== Recent deaths filter =====
+        # Obituary traffic is the biggest single source of "trending" articles
+        # and the least interesting one: drop anyone who died inside the window
+        # so the top slots go to things that are actually happening. Runs
+        # BEFORE enrichment for the same reason as the feature filter above.
+        if SKIP_RECENT_DEATHS_DAYS > 0 and trending:
+            ref_dt = _analyzed_day(date_used)
+            cutoff = ref_dt - timedelta(days=SKIP_RECENT_DEATHS_DAYS)
+            _step_req("Recent deaths filter",
+                      "GET en.wikipedia.org/w/api.php?prop=revisions — 'Deaths in <Month> <Year>' "
+                      "lists ({}d window before {}) + Wikidata P570 for the top {} survivors".format(
+                          SKIP_RECENT_DEATHS_DAYS, ref_dt.strftime("%Y-%m-%d"), DEATH_CHECK_DEPTH))
+            deaths, list_titles = await get_recent_deaths(session, date_used)
+            list_ok = deaths is not None
+            if list_ok:
+                _step_info("{} deaths in window listed on: {}".format(
+                    len(deaths), ", ".join(list_titles)))
+            else:
+                deaths = {}
+                _step_info("deaths list unavailable — relying on Wikidata only")
+            dead = {}  # article → (date of death, source)
+            for article in trending:
+                when = deaths.get(_wiki_title_key(article["article"]))
+                if when is not None:
+                    dead[article["article"]] = (when, "list")
+            # Belt and braces for the slots that can actually reach the
+            # display: the list can lag a fresh death or link a redirect title.
+            to_check = [a for a in trending if a["article"] not in dead][:DEATH_CHECK_DEPTH]
+            sem = asyncio.Semaphore(4)
+
+            async def _death_date(name):
+                async with sem:
+                    return await get_wikidata_death_date(session, name)
+
+            wd_dates = await asyncio.gather(*(_death_date(a["article"]) for a in to_check))
+            for article, when in zip(to_check, wd_dates):
+                if when is not None and when >= cutoff:
+                    dead[article["article"]] = (when, "wikidata")
+            kept = []
+            for article in trending:
+                hit = dead.get(article["article"])
+                if hit:
+                    when, source = hit
+                    article["death_date"] = when.strftime("%Y-%m-%d")
+                    _step_info("recent death: {} — died {} [{}]".format(
+                        article["article"], article["death_date"], source))
+                else:
+                    kept.append(article)
+            n_list = sum(1 for _, s in dead.values() if s == "list")
+            summary = "dropped {} of {} trending ({} via deaths list, {} via Wikidata), {} remain".format(
+                len(dead), len(trending), n_list, len(dead) - n_list, len(kept))
+            if list_ok:
+                _step_ok(summary)
+            else:
+                _step_fail(summary + " — deaths list fetch failed")
+            trending = kept
+
         # ===== Enrichment (top N) =====
         to_enrich = trending[:DISPLAY_COUNT]
         if to_enrich:
@@ -950,14 +1198,16 @@ async def _call_gemini(session, user_text):
     """Single Gemini call with system instruction + grounding. Returns text or ''."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-3.5-flash:generateContent?key={}"
-    ).format(GEMINI_API_KEY)
+        "models/{}:generateContent?key={}"
+    ).format(GEMINI_MODEL, GEMINI_API_KEY)
     payload = {
         "system_instruction": {"parts": [{"text": GEMINI_SYSTEM_RULES}]},
         "contents": [{"parts": [{"text": user_text}]}],
         "tools": [{"google_search": {}}],
         "generationConfig": {
-            "maxOutputTokens": 4096,
+            # Thinking tokens count against this cap; 3.8 Flash spends more of
+            # them by design, so leave headroom (the answer itself is one line).
+            "maxOutputTokens": 8192,
             "thinkingConfig": {
                 "thinkingLevel": "MEDIUM",
             },
@@ -1056,7 +1306,7 @@ async def enrich_with_reasons(trending):
     if not top:
         return 0
     _step_req("Gemini reasoning",
-              "POST generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent — system rules + Google Search grounding (×{}, 5s spacing)".format(len(top)))
+              "POST generativelanguage.googleapis.com/v1beta/models/{}:generateContent — system rules + Google Search grounding (×{}, 5s spacing)".format(GEMINI_MODEL, len(top)))
     started = time.monotonic()
     got_reason = 0
     async with aiohttp.ClientSession() as session:
@@ -1150,9 +1400,14 @@ def main():
     else:
         log.info("No TRMNL webhook - console only mode")
     if GEMINI_API_KEY:
-        log.info("Gemini API configured - AI descriptions enabled")
+        log.info("Gemini API configured - AI descriptions enabled (%s)", GEMINI_MODEL)
     else:
         log.info("No Gemini API key - using news headlines / Wikipedia descriptions")
+    if SKIP_RECENT_DEATHS_DAYS > 0:
+        log.info("Recent-death filter on: dropping people who died within %d days of the analyzed day",
+                 SKIP_RECENT_DEATHS_DAYS)
+    else:
+        log.info("Recent-death filter off (SKIP_RECENT_DEATHS_DAYS=0)")
 
     while True:
         _cycle_start()
