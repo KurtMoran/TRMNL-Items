@@ -11,7 +11,7 @@ Tracks daily flight activity at a local airport using ADS-B data. Shows arrivals
 Shows Wikipedia articles trending well above their normal traffic, with AI-generated explanations of why each article is spiking. Filters out Wikipedia main-page features and recent deaths so the list is real news, not obituaries. Uses Google Gemini with web search grounding, with fallbacks to Google News headlines and Wikipedia intros.
 
 ### [TRMNL Weather](weather-board/)
-Today's land weather + 3-day forecast + ocean/surf conditions for a coastal beach break. Shows high/low (with comparison to yesterday), feels-like, wind, humidity, UV, rain chance, sunrise/sunset, ocean temperature, swell height/period/direction, and computed wave energy in kJ. Uses Open-Meteo Forecast and Marine APIs. Defaults to San Diego + La Jolla Shores; configurable via env vars.
+Today's land weather + 3-day forecast + ocean/surf conditions for a coastal beach break. Shows high/low (with comparison to yesterday), feels-like, wind, humidity, UV, rain chance, sunrise/sunset, ocean temperature, swell height/period/direction, and computed wave energy in kJ. Land weather comes from the National Weather Service (forecast + measured station data) layered over Open-Meteo, with Open-Meteo Marine and NOAA for the ocean. Defaults to San Diego + La Jolla Shores; configurable via env vars.
 
 ---
 

@@ -7,11 +7,16 @@ and a bottom ocean strip with today's water-temp curve and tide markers.
 
 ## How it works
 
-1. Polls **Open-Meteo Forecast** for land weather: today's high/low, current
-   conditions (icon, phrase, feels-like, wind, humidity, AQI proxy), UV, rain
-   probability, sunrise/sunset, plus a 3-day daily outlook (hi/lo, weather
-   code, precip %, UV max, wind speed/direction). Includes `past_days=1` for
-   the "X° cooler/warmer than yesterday" comparison.
+1. **Land weather comes from two sources, merged field by field** (see
+   [Land weather sources](#land-weather-sources)):
+   - **National Weather Service** (primary): the local NWS office's forecast
+     for each day's hi/lo, sky, rain chance and wind; the nearest airport
+     weather station's *measured* feels-like, wind and humidity right now;
+     and that station's measured high yesterday for the "X° cooler/warmer
+     than yesterday" line.
+   - **Open-Meteo Forecast** (base layer): UV, sunrise/sunset, and any field
+     NWS didn't supply this cycle. If NWS is down, the board runs entirely on
+     Open-Meteo, and vice versa.
 2. Polls **Open-Meteo Marine** for ocean data: hourly SST, hourly swell
    height/period, daily swell direction. Daily SST hi *and* lo are computed
    from the hourly buckets for each forecast day.
@@ -90,6 +95,10 @@ convention from Open-Meteo's `swell_wave_direction_dominant`):
 
 | API | Auth | Cost | Rate / Cycle |
 |-----|------|------|--------------|
+| NWS forecast (api.weather.gov) | None (User-Agent) | Free | 1 req/cycle |
+| NWS latest station observation | None (User-Agent) | Free | 1 req/cycle |
+| NWS station history (yesterday's high) | None (User-Agent) | Free | 1 req/day |
+| NWS grid + station lookup | None (User-Agent) | Free | 2 req/week (cached) |
 | Open-Meteo Forecast | None | Free | 1 req/cycle |
 | Open-Meteo Marine | None | Free | 1 req/cycle |
 | Open-Meteo Air Quality | None | Free | 1 req/cycle |
@@ -105,6 +114,68 @@ refresh cadence). Launch Library 2 runs on its own background thread so its
 ~5-min cadence is independent of the main poll. Sunsethue caches for 6 hours
 because the underlying model only updates twice daily (00z and 12z runs
 refresh the full 78h horizon).
+
+### Land weather sources
+
+Open-Meteo is a single global model blend, and its daily weather code is the
+*worst* hour of the day, so one rainy hour turns a mostly dry day into "Heavy
+rain". The NWS forecast comes from the local office's forecasters
+(San Diego = SGX), who handle local effects like the marine layer, and it
+describes the day rather than its worst hour.
+
+Each field starts from Open-Meteo and is replaced by NWS whenever NWS
+supplied a value:
+
+| Field | Source | Fallback |
+|-------|--------|----------|
+| Hi / lo, sky icon + phrase, rain %, wind (today + 3 days) | NWS forecast | Open-Meteo |
+| Feels-like, wind, humidity (now) | Nearest airport station's latest reading (≤ 2h old) | Open-Meteo current |
+| Yesterday's high (for the delta line) | Same station, measured, fetched once a day | Open-Meteo `past_days=1` |
+| UV, sunrise/sunset | Open-Meteo only | — |
+
+Details:
+
+- **Day = daytime period + the night after it**, the usual US convention.
+  So `lo` is that night's low, not the morning low before the high.
+- **Today's high in the evening**: NWS drops the daytime period at ~6pm, so
+  the last daytime forecast seen today is kept in `API_CACHE_FILE`. A
+  container started fresh in the evening uses Open-Meteo's high until the
+  next morning.
+- **Phrases** are condensed to fit the ~90px cards: `Slight Chance Rain
+  Showers then Mostly Sunny` → "Mostly sunny". Real precipitation wins
+  (anything but "Slight Chance"); otherwise the last sky clause (the
+  afternoon); fog only if nothing else is forecast. "Chance"/"Likely" are
+  dropped because the card already shows the rain %.
+- **Feels-like** uses NWS's definition: heat index when hot and humid, wind
+  chill when cold and windy, otherwise the measured air temperature.
+- **Station**: the grid lookup returns stations nearest-first; the board
+  picks the first airport (ICAO-style ID, e.g. KMYF Montgomery Field)
+  because those are quality-controlled ASOS stations. Override with
+  `NWS_STATION`.
+- **Staleness guards**: a forecast NWS hasn't updated in 24h, or a station
+  reading older than 2h, is ignored in favor of Open-Meteo.
+- **Outside the US** the NWS grid lookup fails and the board runs on
+  Open-Meteo alone. Set `NWS_ENABLED=0` to skip the lookup.
+
+### Failed fetches
+
+Open-Meteo's forecast endpoint occasionally hangs past the read timeout. A
+failed cycle used to push `--` for every land-weather field, wiping the good
+data already on the display. Now:
+
+- Every Open-Meteo, NWS and NOAA tide request is tried up to `FETCH_ATTEMPTS`
+  times (5s connect / 10s read timeout, 2s then 4s backoff). Timeouts,
+  connection errors, 429s and 5xx are retried; other 4xx are not.
+- Each good response is saved to `API_CACHE_FILE`. If every attempt fails,
+  the cycle reuses the last good response, as long as it is from the **same
+  local date** and younger than `API_CACHE_MAX_AGE_SEC`. The same-date rule
+  matters because the parsers index daily arrays by position (forecast
+  index 1 = today), so yesterday's response would shift every day by one.
+- A cycle served from the cache is still logged as a failure, so outages
+  stay visible:
+  ```
+  ✗ 71°/59° Heavy rain, ... — live fetch failed (Read timed out. ... (after 3 attempts)); using last good from 15m ago
+  ```
 
 ## Setup
 
@@ -153,6 +224,12 @@ docker run -d \
 | `POLL_INTERVAL_SEC` | No | 900 | Seconds between cycles (default: 15 min) |
 | `TZ` | No | America/Los_Angeles | Timezone for timestamps & API |
 | `DATA_FILE` | No | /data/weather_state.json | State file path |
+| `API_CACHE_FILE` | No | /data/api_cache.json | Last-good copy of each API response, used when a live fetch fails |
+| `API_CACHE_MAX_AGE_SEC` | No | 21600 | Oldest cached response (same local date only) the fallback will serve |
+| `FETCH_ATTEMPTS` | No | 3 | Tries per API request before falling back to the cache |
+| `NWS_ENABLED` | No | 1 | Set to `0` to skip the National Weather Service (e.g. outside the US) |
+| `NWS_STATION` | No | (nearest airport) | Weather station ID for current conditions + yesterday's high, e.g. `KMYF` |
+| `NWS_USER_AGENT` | No | trmnl-weather-board/1.0 | NWS asks clients to identify themselves; add your own contact if you like |
 | `TIDE_STATION_ID` | No | 9410230 | NOAA CO-OPS tide station (default: La Jolla / Scripps Pier) |
 | `NDBC_STATION` | No | LJAC1 | NDBC station ID for secondary water-temp feed (default: Scripps Pier) |
 | `NOAA_WTEMP_STATION` | No | (same as `TIDE_STATION_ID`) | NOAA CO-OPS station ID for primary 6-min water-temp feed |

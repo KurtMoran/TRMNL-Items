@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Weather Board for TRMNL e-ink display.
 
-Polls Open-Meteo Forecast + Marine APIs every 15 minutes and pushes
-today's weather, ocean conditions, and 3-day forecast to a TRMNL
-display via webhook.
+Every 15 minutes: land weather from the National Weather Service layered
+over Open-Meteo Forecast, ocean conditions from Open-Meteo Marine + NOAA,
+pushed with a 3-day forecast to a TRMNL display via webhook.
 """
-import json, logging, os, threading, time
-from datetime import datetime, timedelta
+import json, logging, os, re, threading, time
+from datetime import datetime, timedelta, timezone, time as dtime
+from urllib.parse import urlencode
 import requests
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -24,6 +25,13 @@ TZ_NAME = os.getenv("TZ", "America/Los_Angeles")
 TRMNL_WEBHOOK_UUID = os.getenv("TRMNL_WEBHOOK_UUID", "")
 TRMNL_API_URL = "https://trmnl.com/api/custom_plugins"
 DATA_FILE = os.getenv("DATA_FILE", "/data/weather_state.json")
+# Last-good copy of each API response. When a live fetch fails (Open-Meteo's
+# forecast endpoint occasionally hangs past the read timeout), the cycle falls
+# back to the most recent good response from the same local day instead of
+# pushing "--" over everything on the display.
+API_CACHE_FILE = os.getenv("API_CACHE_FILE", "/data/api_cache.json")
+API_CACHE_MAX_AGE_SEC = int(os.getenv("API_CACHE_MAX_AGE_SEC", "21600"))  # 6h
+FETCH_ATTEMPTS = int(os.getenv("FETCH_ATTEMPTS", "3"))
 TIDE_STATION_ID = os.getenv("TIDE_STATION_ID", "9410230")  # NOAA La Jolla (Scripps Pier)
 # NOAA CO-OPS water temperature is reported every 6 min — the same Scripps Pier
 # station as the tide reference. This is the freshest real-time water-temp feed
@@ -84,6 +92,23 @@ AIR_QUALITY_URL = (
     "&current=us_aqi"
     "&timezone={tz}"
 ).format(lat=WEATHER_LAT, lon=WEATHER_LON, tz=TZ_NAME)
+
+# National Weather Service (api.weather.gov): US-only, free, no key. Primary
+# source for land weather. The local NWS office's forecast supplies hi/lo, sky,
+# rain chance and wind. The nearest airport weather station supplies measured
+# "right now" conditions and yesterday's actual high. Open-Meteo stays as the
+# base layer: it's the only source of UV and sunrise/sunset, and it fills any
+# field NWS can't supply on a given cycle. Outside the US the NWS grid lookup
+# fails and the board runs on Open-Meteo alone (or set NWS_ENABLED=0).
+NWS_ENABLED = os.getenv("NWS_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
+NWS_STATION = os.getenv("NWS_STATION", "").strip().upper()  # blank = nearest airport station
+# NWS asks API clients to identify themselves in the User-Agent; add your own
+# contact (site or email) via NWS_USER_AGENT if you like.
+NWS_USER_AGENT = os.getenv("NWS_USER_AGENT", "trmnl-weather-board/1.0")
+NWS_HEADERS = {"User-Agent": NWS_USER_AGENT, "Accept": "application/geo+json"}
+NWS_META_REFRESH_SEC = 7 * 86400       # grid + station lookup rarely changes
+NWS_FORECAST_MAX_AGE_SEC = 24 * 3600   # reject a forecast NWS hasn't refreshed in a day
+NWS_OBS_MAX_AGE_SEC = 2 * 3600         # reject a station reading older than this
 
 
 def wmo_to_icon(code):
@@ -314,14 +339,93 @@ def _short_url(url):
         return url
 
 
-def fetch_json(url):
-    """Returns (data, error_str). error_str is None on success."""
+def fetch_json(url, attempts=None, headers=None):
+    """Returns (data, error_str). error_str is None on success.
+
+    Retries timeouts, connection errors, 429s and 5xx — those are usually
+    one-off hangs that succeed seconds later. Other 4xx responses are not
+    retried since the same request would fail the same way."""
+    attempts = attempts or FETCH_ATTEMPTS
+    err = None
+    tried = 0
+    for i in range(attempts):
+        tried += 1
+        try:
+            resp = requests.get(url, timeout=(5, 10), headers=headers)
+            resp.raise_for_status()
+            return resp.json(), None
+        except requests.HTTPError as e:
+            err = str(e)
+            status = e.response.status_code if e.response is not None else 0
+            if status != 429 and status < 500:
+                break
+        except Exception as e:
+            err = str(e)
+        if i + 1 < attempts:
+            time.sleep(2 * (i + 1))
+    if tried > 1:
+        err = "{} (after {} attempts)".format(err, tried)
+    return None, err
+
+
+def _load_api_cache():
     try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        return resp.json(), None
+        with open(API_CACHE_FILE) as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_api_cache(cache):
+    try:
+        os.makedirs(os.path.dirname(API_CACHE_FILE), exist_ok=True)
+        with open(API_CACHE_FILE, "w") as f:
+            json.dump(cache, f)
     except Exception as e:
-        return None, str(e)
+        log.warning("Could not save API cache: %s", e)
+
+
+def fetch_json_fallback(name, url, now, headers=None):
+    """fetch_json plus a last-good fallback.
+
+    On success the response is saved under `name`. On failure, returns the
+    saved response if it was fetched earlier on the same local date and is
+    younger than API_CACHE_MAX_AGE_SEC. The same-date rule matters: the
+    parsers index daily arrays by position (e.g. forecast index 1 = today),
+    so a response from yesterday would shift every day by one.
+
+    Returns (data, error_str, stale_note). stale_note is None for live data,
+    or a short description when cached data is being served."""
+    data, err = fetch_json(url, headers=headers)
+    cache = _load_api_cache()
+    if data is not None:
+        cache[name] = {"fetched_at": now.isoformat(), "data": data}
+        _save_api_cache(cache)
+        return data, None, None
+
+    entry = cache.get(name)
+    if isinstance(entry, dict) and entry.get("data") is not None:
+        try:
+            fetched_at = datetime.fromisoformat(entry["fetched_at"])
+        except (KeyError, TypeError, ValueError):
+            fetched_at = None
+        if (fetched_at is not None
+                and fetched_at.date() == now.date()
+                and (now - fetched_at).total_seconds() < API_CACHE_MAX_AGE_SEC):
+            age_min = int((now - fetched_at).total_seconds() // 60)
+            return entry["data"], err, "live fetch failed ({}); using last good from {}m ago".format(
+                err, age_min)
+    return None, err, None
+
+
+def _report(msg, stale_note):
+    """Log a parsed step: success for live data, failure when served from the
+    last-good cache (so the cycle summary still flags the outage)."""
+    if stale_note:
+        _step_fail("{} — {}".format(msg, stale_note))
+    else:
+        _step_ok(msg)
 
 
 def fetch_ndbc():
@@ -1028,6 +1132,498 @@ def build_today_curve(now, real_hourly, om_hourly, delta, sunrise_x=None, sunset
     }
 
 
+# ============= Land weather: Open-Meteo base + NWS overlay =============
+
+def _num(v):
+    """v if it's a real number (not bool/None), else None."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def fmt_wind(mph, direction):
+    """(9.4, 'W') -> '9 mph W'; 0 -> 'Calm'; None -> ''."""
+    if mph is None:
+        return ""
+    mph = round(mph)
+    if mph == 0:
+        return "Calm"
+    return "{} mph {}".format(mph, direction or "").strip()
+
+
+def parse_open_meteo(fc):
+    """Open-Meteo forecast response -> {"days": {date_iso: {...}}, "yest_hi",
+    "current"}. Index 0 of every daily array is yesterday (past_days=1)."""
+    daily = fc.get("daily") or {}
+    current = fc.get("current") or {}
+    dates = daily.get("time") or []
+
+    def at(key, i):
+        arr = daily.get(key) or []
+        return arr[i] if i < len(arr) else None
+
+    days = {}
+    for i in range(1, len(dates)):
+        pop = _num(at("precipitation_probability_max", i))
+        icon, phrase = wmo_resolve(at("weather_code", i), pop)
+        days[dates[i]] = {
+            "hi": _num(at("temperature_2m_max", i)),
+            "lo": _num(at("temperature_2m_min", i)),
+            "icon": icon, "phrase": phrase, "pop": pop,
+            "uv": _num(at("uv_index_max", i)),
+            "wind": fmt_wind(_num(at("wind_speed_10m_max", i)),
+                             cardinal(_num(at("wind_direction_10m_dominant", i)))),
+            "rise": at("sunrise", i), "set": at("sunset", i),
+        }
+    return {
+        "days": days,
+        "yest_hi": _num(at("temperature_2m_max", 0)) if dates else None,
+        "current": {
+            "feels": _num(current.get("apparent_temperature")),
+            "wind": fmt_wind(_num(current.get("wind_speed_10m")),
+                             cardinal(_num(current.get("wind_direction_10m")))),
+            "humid": _num(current.get("relative_humidity_2m")),
+        },
+    }
+
+
+# NWS shortForecast condensing. Card cells are ~90px at 11px, so phrases must
+# stay around 14 characters ("Slight Chance Rain Showers then Mostly Sunny"
+# won't fit). Probability qualifiers are dropped because the card already
+# shows the rain %.
+CARD_PHRASE_MAX = 14
+_NWS_QUALIFIERS = ("slight chance ", "chance ", "isolated ", "scattered ", "patchy ",
+                   "areas of ", "widespread ", "periods of ", "occasional ", "numerous ")
+_NWS_SHORTEN = {"rain showers": "showers", "showers and thunderstorms": "t-storms",
+                "thunderstorms": "t-storms", "rain and snow showers": "rain/snow"}
+_ICON_PHRASE = {"sun": "Sunny", "sun-cloud": "Mostly sunny", "partly-cloudy": "Partly cloudy",
+                "cloud": "Cloudy", "fog": "Fog", "rain": "Rain", "snow": "Snow",
+                "storm": "T-storms"}
+_PRECIP_RANK = {"storm": 3, "snow": 2, "rain": 1}
+
+
+def _nws_part_icon(part):
+    """Template icon key for one clause of an NWS shortForecast."""
+    s = part.lower()
+    if "thunder" in s:
+        return "storm"
+    if "freezing" in s:
+        return "rain"
+    if any(w in s for w in ("snow", "sleet", "flurr", "blizzard")):
+        return "snow"
+    if any(w in s for w in ("rain", "shower", "drizzle")):
+        return "rain"
+    if any(w in s for w in ("fog", "haze", "smoke", "dust", "mist")):
+        return "fog"
+    if "partly" in s:
+        return "partly-cloudy"
+    if "mostly sunny" in s or "mostly clear" in s:
+        return "sun-cloud"
+    if "cloud" in s or "overcast" in s:
+        return "cloud"
+    if any(w in s for w in ("sunny", "clear", "fair", "hot")):
+        return "sun"
+    return "cloud"
+
+
+def _nws_short_phrase(part, icon):
+    s = part.lower().strip()
+    stripped = True
+    while stripped:
+        stripped = False
+        for q in _NWS_QUALIFIERS:
+            if s.startswith(q):
+                s = s[len(q):]
+                stripped = True
+    if s.endswith(" likely"):
+        s = s[:-len(" likely")]
+    s = _NWS_SHORTEN.get(s, s)
+    if not s or len(s) > CARD_PHRASE_MAX:
+        return _ICON_PHRASE.get(icon, "")
+    return s[0].upper() + s[1:]
+
+
+def nws_icon_phrase(short_forecast):
+    """NWS shortForecast -> (icon_key, short phrase), e.g.
+    'Slight Chance Rain Showers then Mostly Sunny' -> ('sun-cloud', 'Mostly sunny').
+
+    Picks the clause that best describes the day: real precipitation (anything
+    but 'Slight Chance') wins, strongest first; otherwise the last sky clause
+    (NWS lists clauses in time order, so that's the afternoon); fog only when
+    it's the only thing forecast. Returns (None, None) for empty input."""
+    parts = [s.strip() for s in (short_forecast or "").split(" then ") if s.strip()]
+    if not parts:
+        return None, None
+    tagged = [(part, _nws_part_icon(part)) for part in parts]
+    precip = [t for t in tagged
+              if t[1] in _PRECIP_RANK and not t[0].lower().startswith("slight chance")]
+    sky = [t for t in tagged if t[1] not in _PRECIP_RANK and t[1] != "fog"]
+    fog = [t for t in tagged if t[1] == "fog"]
+    if precip:
+        part, icon = max(precip, key=lambda t: _PRECIP_RANK[t[1]])
+    elif sky:
+        part, icon = sky[-1]
+    elif fog:
+        part, icon = fog[0]
+    else:
+        part, icon = tagged[0]
+    return icon, _nws_short_phrase(part, icon)
+
+
+def _nws_wind_mph(s):
+    """'5 to 15 mph' -> 15; '10 mph' -> 10; None/'' -> None."""
+    nums = [int(n) for n in re.findall(r"\d+", s or "")]
+    return max(nums) if nums else None
+
+
+def parse_nws_periods(periods):
+    """NWS 12-hour forecast periods -> {date_iso: {hi, lo, icon, phrase, wind,
+    pop_day, pop_night}}. A day is its daytime period (6am-6pm) plus the night
+    that follows it, so `lo` is that night's low (the usual US convention).
+    Night periods are dated by start-minus-12h: a night starting 6pm-11pm
+    belongs to that day, and an 'Overnight' period starting after midnight
+    belongs to the day before."""
+    days = {}
+    for per in periods:
+        try:
+            start = datetime.fromisoformat(per["startTime"]).astimezone().replace(tzinfo=None)
+        except (KeyError, TypeError, ValueError):
+            continue
+        temp = _num(per.get("temperature"))
+        if temp is not None and per.get("temperatureUnit") == "C":
+            temp = temp * 9 / 5 + 32
+        pop = _num((per.get("probabilityOfPrecipitation") or {}).get("value"))
+        if per.get("isDaytime"):
+            icon, phrase = nws_icon_phrase(per.get("shortForecast"))
+            days.setdefault(start.date().isoformat(), {}).update(
+                hi=temp, icon=icon, phrase=phrase, pop_day=pop,
+                wind=fmt_wind(_nws_wind_mph(per.get("windSpeed")), per.get("windDirection")))
+        else:
+            days.setdefault((start - timedelta(hours=12)).date().isoformat(), {}).update(
+                lo=temp, pop_night=pop)
+    return days
+
+
+_NWS_DAY_KEYS = ("hi", "icon", "phrase", "wind", "pop_day")
+
+
+def fetch_nws_meta(now):
+    """Forecast URL + observation station for WEATHER_LAT/LON, cached a week.
+    Returns (meta_or_None, note_or_None)."""
+    key = "{:.4f},{:.4f}".format(WEATHER_LAT, WEATHER_LON)
+    cache = _load_api_cache()
+    m = cache.get("nws_meta") if isinstance(cache.get("nws_meta"), dict) else {}
+    same_place = m.get("key") == key and bool(m.get("forecast"))
+    try:
+        age = (now - datetime.fromisoformat(m["fetched_at"])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        age = None
+    if same_place and m.get("station") and age is not None and age < NWS_META_REFRESH_SEC:
+        return m, None
+
+    points, err = fetch_json("https://api.weather.gov/points/" + key, headers=NWS_HEADERS)
+    props = (points or {}).get("properties") or {}
+    if not props.get("forecast"):
+        if same_place:
+            return m, "grid lookup failed ({}); using cached grid".format(err)
+        return None, "grid lookup failed: {}".format(err or "no forecast for this location")
+
+    ids = []
+    if props.get("observationStations"):
+        stations, _ = fetch_json(props["observationStations"] + "?limit=20", headers=NWS_HEADERS)
+        ids = [((f.get("properties") or {}).get("stationIdentifier") or "")
+               for f in ((stations or {}).get("features") or [])]
+    # The list is nearest-first. Prefer the nearest airport (ICAO-style ID like
+    # KMYF): ASOS stations are quality-controlled and report at least hourly,
+    # unlike some of the mesonet stations that can be closer.
+    station = next((s for s in ids if re.fullmatch(r"[KPT][A-Z0-9]{3}", s)),
+                   ids[0] if ids else None)
+    station = station or (m.get("station") if same_place else None)
+    m = {"key": key, "forecast": props["forecast"], "office": props.get("gridId"),
+         "station": station,
+         # No station yet -> leave fetched_at empty so the next cycle retries.
+         "fetched_at": now.isoformat() if station else None}
+    cache = _load_api_cache()
+    cache["nws_meta"] = m
+    _save_api_cache(cache)
+    return m, None
+
+
+def fetch_nws_forecast(meta, now):
+    """Returns (days, msg, stale_note). `days` is empty when there's nothing
+    usable, in which case msg says why."""
+    data, err, stale = fetch_json_fallback("nws_forecast", meta["forecast"], now,
+                                           headers=NWS_HEADERS)
+    if data is None:
+        return {}, "HTTP failed: {}".format(err or "no data"), None
+    props = data.get("properties") or {}
+    try:
+        issued = datetime.fromisoformat(props["updateTime"])
+        age_h = (datetime.now(timezone.utc) - issued).total_seconds() / 3600
+    except (KeyError, TypeError, ValueError):
+        return {}, "forecast has no updateTime", None
+    # The API occasionally serves a stuck old forecast; don't display it.
+    if age_h * 3600 > NWS_FORECAST_MAX_AGE_SEC:
+        return {}, "forecast is stale (issued {:.0f}h ago)".format(age_h), None
+    days = parse_nws_periods(props.get("periods") or [])
+
+    # NWS drops today's daytime period once it ends (~6pm), and today's high
+    # with it. Keep the last daytime forecast seen today so the hero still
+    # shows a high in the evening.
+    today_key = now.date().isoformat()
+    today = days.setdefault(today_key, {})
+    cache = _load_api_cache()
+    kept = ""
+    if today.get("hi") is not None:
+        saved = {k: today.get(k) for k in _NWS_DAY_KEYS}
+        saved["date"] = today_key
+        cache["nws_today"] = saved
+        _save_api_cache(cache)
+    else:
+        saved = cache.get("nws_today") if isinstance(cache.get("nws_today"), dict) else {}
+        if saved.get("date") == today_key:
+            for k in _NWS_DAY_KEYS:
+                if today.get(k) is None:
+                    today[k] = saved.get(k)
+            kept = " (today's high kept from earlier forecast)"
+
+    for d in days.values():
+        pops = [v for v in (d.get("pop_day"), d.get("pop_night")) if v is not None]
+        d["pop"] = max(pops) if pops else None
+
+    summary = ", ".join(
+        "{} {}°/{}° {}".format(
+            day_label(k), safe_round(days.get(k, {}).get("hi")),
+            safe_round(days.get(k, {}).get("lo")), days.get(k, {}).get("phrase") or "?")
+        for k in ((now.date() + timedelta(days=i)).isoformat() for i in range(4)))
+    return days, "{}{} • issued {:.0f}h ago".format(summary, kept, age_h), stale
+
+
+def fetch_nws_obs(station, now):
+    """Latest measured conditions at `station`. Returns (current_or_None, msg)."""
+    url = "https://api.weather.gov/stations/{}/observations/latest".format(station)
+    data, err = fetch_json(url, headers=NWS_HEADERS)
+    if data is None:
+        return None, "HTTP failed: {}".format(err or "no data")
+    props = data.get("properties") or {}
+    try:
+        ts = datetime.fromisoformat(props["timestamp"])
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return None, "reading has no timestamp"
+    if age > NWS_OBS_MAX_AGE_SEC:
+        return None, "latest reading is {:.1f}h old".format(age / 3600)
+
+    def val(key):
+        v = props.get(key) or {}
+        if v.get("qualityControl") == "X":  # failed NWS quality control
+            return None, ""
+        return _num(v.get("value")), v.get("unitCode") or ""
+
+    temp_c, _ = val("temperature")
+    if temp_c is None:
+        return None, "reading has no temperature"
+    # NWS "feels like" = heat index when hot and humid, wind chill when cold
+    # and windy, otherwise the air temperature itself.
+    feels_c = next((c for c in (val("heatIndex")[0], val("windChill")[0]) if c is not None),
+                   temp_c)
+    wind, unit = val("windSpeed")
+    mph = None
+    if wind is not None:
+        mph = wind * 2.23694 if unit.endswith("m_s-1") else wind / 1.609344
+    wdir, _ = val("windDirection")
+    humid, _ = val("relativeHumidity")
+    cur = {
+        "temp": temp_c * 9 / 5 + 32,
+        "feels": feels_c * 9 / 5 + 32,
+        "wind": fmt_wind(mph, cardinal(wdir)) if mph is not None else None,
+        "humid": humid,
+    }
+    return cur, "{:.0f}°F, feels {:.0f}°, wind {}, humidity {} • {}m old".format(
+        cur["temp"], cur["feels"], cur["wind"] or "--",
+        "{:.0f}%".format(humid) if humid is not None else "--", int(age // 60))
+
+
+def fetch_yesterday_high(station, now):
+    """Yesterday's measured high at `station` (local calendar day), fetched
+    once per day. Returns (hi_F_or_None, msg, failed)."""
+    y = now.date() - timedelta(days=1)
+    cache = _load_api_cache()
+    c = cache.get("nws_yesterday") if isinstance(cache.get("nws_yesterday"), dict) else {}
+    if (c.get("date") == y.isoformat() and c.get("station") == station
+            and _num(c.get("hi")) is not None):
+        return c["hi"], "{:.0f}°F from {} readings (cached)".format(c["hi"], c.get("n")), False
+
+    start = datetime.combine(y, dtime(0)).astimezone().astimezone(timezone.utc)
+    end = datetime.combine(now.date(), dtime(0)).astimezone().astimezone(timezone.utc)
+    url = "https://api.weather.gov/stations/{}/observations?{}".format(station, urlencode({
+        "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "limit": 500,
+    }))
+    data, err = fetch_json(url, headers=NWS_HEADERS)
+    if data is None:
+        return None, "HTTP failed: {}".format(err or "no data"), True
+    temps = []
+    for f in data.get("features") or []:
+        t = (f.get("properties") or {}).get("temperature") or {}
+        if t.get("qualityControl") != "X" and _num(t.get("value")) is not None:
+            temps.append(t["value"])
+    if len(temps) < 12:  # too sparse to trust the max
+        return None, "only {} readings for {}".format(len(temps), y.isoformat()), True
+    hi = max(temps) * 9 / 5 + 32
+    cache = _load_api_cache()
+    cache["nws_yesterday"] = {"date": y.isoformat(), "station": station, "hi": hi,
+                              "n": len(temps)}
+    _save_api_cache(cache)
+    return hi, "{:.0f}°F from {} readings".format(hi, len(temps)), False
+
+
+def land_weather(now):
+    """Fetches land weather from Open-Meteo and NWS and merges them.
+
+    Every field starts from Open-Meteo and is replaced by NWS wherever NWS
+    supplied a value, so either source going down only costs the fields that
+    source alone provides. Returns {"days": {date_iso: {...}} for today + 3,
+    "current": {feels, wind, humid}, "yest_hi"}."""
+    today_str = now.date().isoformat()
+
+    _step_req("Open-Meteo Forecast",
+              "GET {} — {} ({:.3f},{:.3f}), past 1d + 4d daily".format(
+                  _short_url(FORECAST_URL), LOCATION_NAME, WEATHER_LAT, WEATHER_LON))
+    fc, err, stale = fetch_json_fallback("forecast", FORECAST_URL, now)
+    om = parse_open_meteo(fc) if fc else {"days": {}, "yest_hi": None, "current": {}}
+    if fc:
+        t = om["days"].get(today_str, {})
+        _report("{}°/{}° {}, feels {}°, wind {}, rise {} set {}".format(
+            safe_round(t.get("hi")), safe_round(t.get("lo")), t.get("phrase") or "",
+            safe_round(om["current"].get("feels")), om["current"].get("wind") or "--",
+            fmt_time(t.get("rise")), fmt_time(t.get("set"))), stale)
+    else:
+        _step_fail("HTTP failed: {}".format(err or "no data"))
+
+    nws_days, obs, obs_yest, station = {}, None, None, None
+    if NWS_ENABLED:
+        meta, meta_note = fetch_nws_meta(now)
+        if meta is None:
+            _step_req("NWS Forecast", "GET api.weather.gov/points — grid lookup")
+            _step_fail(meta_note)
+        else:
+            station = NWS_STATION or meta.get("station")
+            _step_req("NWS Forecast", "GET {} — NWS {} office".format(
+                _short_url(meta["forecast"]), meta.get("office") or "local"))
+            nws_days, msg, note = fetch_nws_forecast(meta, now)
+            if meta_note:
+                msg = "{} ({})".format(msg, meta_note)
+            if nws_days:
+                _report(msg, note)
+            else:
+                _step_fail(msg)
+        if station:
+            _step_req("NWS station {}".format(station),
+                      "GET api.weather.gov/stations/{}/observations/latest — measured now".format(
+                          station))
+            obs, msg = fetch_nws_obs(station, now)
+            (_step_ok if obs else _step_fail)(msg)
+            _step_req("Yesterday's high ({})".format(station),
+                      "station history, fetched once a day")
+            obs_yest, msg, failed = fetch_yesterday_high(station, now)
+            (_step_fail if failed else _step_ok)(msg)
+
+    days, nws_count = {}, 0
+    for i in range(4):
+        key = (now.date() + timedelta(days=i)).isoformat()
+        d = dict(om["days"].get(key, {}))
+        took = False
+        for f in ("hi", "lo", "icon", "phrase", "pop", "wind"):
+            v = nws_days.get(key, {}).get(f)
+            if v is not None and v != "":
+                d[f] = v
+                took = True
+        nws_count += took
+        days[key] = d
+    current = dict(om["current"])
+    for f in ("feels", "wind", "humid"):
+        if obs and obs.get(f) is not None:
+            current[f] = obs[f]
+    yest_hi = obs_yest if obs_yest is not None else om["yest_hi"]
+
+    _step_req("Merge land weather", "local — NWS over Open-Meteo, field by field")
+    _step_ok("forecast: NWS {}/4 days • now: {} • yesterday: {} • UV + sun times: Open-Meteo".format(
+        nws_count, station if obs else "Open-Meteo",
+        station if obs_yest is not None else "Open-Meteo"))
+    return {"days": days, "current": current, "yest_hi": yest_hi}
+
+
+def apply_land_weather(p, land, now):
+    """Formats merged land weather into the payload fields the template reads."""
+    days = land["days"]
+    today = days.get(now.date().isoformat(), {})
+    today_hi = _num(today.get("hi"))
+
+    p["hi"] = safe_round(today_hi)
+    p["lo"] = safe_round(today.get("lo"))
+    if today.get("icon"):
+        p["icon"], p["phrase"] = today["icon"], today.get("phrase") or ""
+
+    yest_hi = _num(land["yest_hi"])
+    if yest_hi is not None and today_hi is not None:
+        delta_y = round(today_hi) - round(yest_hi)
+        if abs(delta_y) <= SAME_THRESHOLD:
+            p["delta"] = "Same as yesterday"
+        elif delta_y > 0:
+            p["delta"] = "{}° warmer than yesterday".format(delta_y)
+        else:
+            p["delta"] = "{}° cooler than yesterday".format(abs(delta_y))
+
+    tomorrow_hi = _num(days.get((now.date() + timedelta(days=1)).isoformat(), {}).get("hi"))
+    if tomorrow_hi is not None and today_hi is not None:
+        tdelta = round(tomorrow_hi) - round(today_hi)
+        if abs(tdelta) <= SAME_THRESHOLD:
+            p["tdelta"] = "Tomorrow about the same"
+        elif tdelta > 0:
+            p["tdelta"] = "Tomorrow {}° warmer".format(tdelta)
+        else:
+            p["tdelta"] = "Tomorrow {}° cooler".format(abs(tdelta))
+
+    cur = land["current"]
+    p["feels"] = safe_round(cur.get("feels"))
+    if cur.get("wind"):
+        p["wind"] = cur["wind"]
+    if _num(cur.get("humid")) is not None:
+        p["humid"] = "{}%".format(round(cur["humid"]))
+    if _num(today.get("uv")) is not None:
+        p["uv"] = round(today["uv"])
+    if _num(today.get("pop")) is not None:
+        p["rain"] = "{}%".format(round(today["pop"]))
+    if today.get("rise"):
+        p["rise"] = fmt_time(today["rise"])
+        p["sunrise_x"] = _iso_to_curve_x(today["rise"])
+    if today.get("set"):
+        p["set"] = fmt_time(today["set"])
+        p["sunset_x"] = _iso_to_curve_x(today["set"])
+
+    # Always three cards (tomorrow first) so they stay index-aligned with the
+    # ocean forecast they're zipped with later.
+    cards = []
+    for i in range(1, 4):
+        key = (now.date() + timedelta(days=i)).isoformat()
+        d = days.get(key, {})
+        d_hi = _num(d.get("hi"))
+        pop, uv = _num(d.get("pop")), _num(d.get("uv"))
+        cards.append({
+            "day": day_label(key),
+            "icon": d.get("icon") or "cloud",
+            "phrase": d.get("phrase") or "",
+            "hi": safe_round(d_hi),
+            "lo": safe_round(d.get("lo")),
+            "delta": (fmt_delta(round(d_hi) - round(today_hi))
+                      if d_hi is not None and today_hi is not None else ""),
+            "precip_n": round(pop) if pop is not None else None,
+            "uv_n": round(uv) if uv is not None else None,
+            "wind": d.get("wind") or "",
+        })
+    p["forecast"] = cards
+
+
 def build_payload():
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
@@ -1077,113 +1673,8 @@ def build_payload():
     else:
         _step_ok(msg)
 
-    # ===== Open-Meteo Forecast =====
-    _step_req("Open-Meteo Forecast",
-              "GET {} — {} ({:.3f},{:.3f}), past 1d + 4d hourly+daily".format(
-                  _short_url(FORECAST_URL), LOCATION_NAME, WEATHER_LAT, WEATHER_LON))
-    forecast, err = fetch_json(FORECAST_URL)
-    today_hi = None
-    if not forecast:
-        _step_fail("HTTP failed: {}".format(err or "no data"))
-    else:
-        daily = forecast.get("daily", {})
-        current = forecast.get("current", {})
-        time_arr = daily.get("time", [])
-        temp_max = daily.get("temperature_2m_max", [])
-        temp_min = daily.get("temperature_2m_min", [])
-        wcodes = daily.get("weather_code", [])
-        sunrise = daily.get("sunrise", [])
-        sunset = daily.get("sunset", [])
-        uv_max = daily.get("uv_index_max", [])
-        pop = daily.get("precipitation_probability_max", [])
-
-        # Index 0 = yesterday (past_days=1), 1 = today, 2..4 = next 3 days
-        if len(temp_max) >= 2:
-            yest_hi = temp_max[0]
-            today_hi = temp_max[1]
-            today_lo = temp_min[1]
-            today_code = wcodes[1] if len(wcodes) > 1 else None
-
-            p["hi"] = safe_round(today_hi)
-            p["lo"] = safe_round(today_lo)
-            today_pop = pop[1] if len(pop) > 1 and isinstance(pop[1], (int, float)) else None
-            p["icon"], p["phrase"] = wmo_resolve(today_code, today_pop)
-
-            if isinstance(yest_hi, (int, float)) and isinstance(today_hi, (int, float)):
-                delta_y = round(today_hi) - round(yest_hi)
-                if abs(delta_y) <= SAME_THRESHOLD:
-                    p["delta"] = "Same as yesterday"
-                elif delta_y > 0:
-                    p["delta"] = "{}° warmer than yesterday".format(delta_y)
-                else:
-                    p["delta"] = "{}° cooler than yesterday".format(abs(delta_y))
-
-            if len(temp_max) >= 3 and isinstance(temp_max[2], (int, float)) and isinstance(today_hi, (int, float)):
-                tdelta = round(temp_max[2]) - round(today_hi)
-                if abs(tdelta) <= SAME_THRESHOLD:
-                    p["tdelta"] = "Tomorrow about the same"
-                elif tdelta > 0:
-                    p["tdelta"] = "Tomorrow {}° warmer".format(tdelta)
-                else:
-                    p["tdelta"] = "Tomorrow {}° cooler".format(abs(tdelta))
-
-            p["feels"] = safe_round(current.get("apparent_temperature"))
-
-        wind_spd = current.get("wind_speed_10m")
-        wind_dir = current.get("wind_direction_10m")
-        if isinstance(wind_spd, (int, float)):
-            p["wind"] = "{} mph {}".format(round(wind_spd), cardinal(wind_dir)).strip()
-
-        humidity = current.get("relative_humidity_2m")
-        if isinstance(humidity, (int, float)):
-            p["humid"] = "{}%".format(round(humidity))
-
-        if len(uv_max) > 1 and isinstance(uv_max[1], (int, float)):
-            p["uv"] = round(uv_max[1])
-
-        if len(pop) > 1 and isinstance(pop[1], (int, float)):
-            p["rain"] = "{}%".format(round(pop[1]))
-
-        if len(sunrise) > 1:
-            p["rise"] = fmt_time(sunrise[1])
-            p["sunrise_x"] = _iso_to_curve_x(sunrise[1])
-        if len(sunset) > 1:
-            p["set"] = fmt_time(sunset[1])
-            p["sunset_x"] = _iso_to_curve_x(sunset[1])
-
-        wind_max_arr = daily.get("wind_speed_10m_max", [])
-        wind_dir_arr = daily.get("wind_direction_10m_dominant", [])
-
-        forecast_days = []
-        for i in range(2, 5):
-            if i < len(temp_max) and i < len(time_arr):
-                d_hi = temp_max[i]
-                wcode = wcodes[i] if i < len(wcodes) else None
-                d_pop = pop[i] if i < len(pop) and isinstance(pop[i], (int, float)) else None
-                d_uv = uv_max[i] if i < len(uv_max) and isinstance(uv_max[i], (int, float)) else None
-                d_wind_spd = wind_max_arr[i] if i < len(wind_max_arr) and isinstance(wind_max_arr[i], (int, float)) else None
-                d_wind_dir = wind_dir_arr[i] if i < len(wind_dir_arr) and isinstance(wind_dir_arr[i], (int, float)) else None
-                delta_str = ""
-                if isinstance(d_hi, (int, float)) and isinstance(today_hi, (int, float)):
-                    delta_str = fmt_delta(round(d_hi) - round(today_hi))
-                icon, phrase = wmo_resolve(wcode, d_pop)
-                forecast_days.append({
-                    "day": day_label(time_arr[i]),
-                    "icon": icon,
-                    "phrase": phrase,
-                    "hi": safe_round(d_hi),
-                    "lo": safe_round(temp_min[i]),
-                    "delta": delta_str,
-                    "precip_n": round(d_pop) if d_pop is not None else None,
-                    "uv_n": round(d_uv) if d_uv is not None else None,
-                    "wind": ("{} mph {}".format(round(d_wind_spd), cardinal(d_wind_dir)).strip()
-                             if d_wind_spd is not None else ""),
-                })
-        p["forecast"] = forecast_days
-
-        _step_ok("{}°/{}° {}, feels {}°, wind {}, rise {} set {}, {}d forecast".format(
-            p["hi"], p["lo"], p["phrase"], p["feels"],
-            p["wind"], p["rise"], p["set"], len(forecast_days)))
+    # ===== Land weather (Open-Meteo base + NWS overlay) =====
+    apply_land_weather(p, land_weather(now), now)
 
     # ===== Sunsethue (sunrise + sunset quality, today + 3-day forecast) =====
     # One /forecast call returns events for today plus the next 2 days. Today's
@@ -1215,7 +1706,7 @@ def build_payload():
     _step_req("Open-Meteo Marine",
               "GET {} — {} ({:.3f},{:.3f}), SST + swell, 4d daily".format(
                   _short_url(MARINE_URL), OCEAN_NAME, OCEAN_LAT, OCEAN_LON))
-    marine, err = fetch_json(MARINE_URL)
+    marine, err, stale = fetch_json_fallback("marine", MARINE_URL, now)
     om_now_sst = None  # OM's prediction for the current hour — for calibration
     sst_by_hour = {}
     sst_by_day_hi = {}  # local-date -> max hourly SST (used for delta calc)
@@ -1283,8 +1774,8 @@ def build_payload():
                     })
         p["ocean_forecast"] = ocean_fc
 
-        _step_ok("{} hourly SST, {} hourly swell, {}-day ocean forecast".format(
-            len(sst_by_hour), len(swell_by_hour), len(ocean_fc)))
+        _report("{} hourly SST, {} hourly swell, {}-day ocean forecast".format(
+            len(sst_by_hour), len(swell_by_hour), len(ocean_fc)), stale)
 
     # ===== NOAA CO-OPS water temp (primary nearshore observation) =====
     # 6-min cadence at Scripps Pier — the same pier as NDBC LJAC1 but a more
@@ -1375,14 +1866,14 @@ def build_payload():
     _step_req("Open-Meteo Air Quality",
               "GET {} — current US AQI ({:.3f},{:.3f})".format(
                   _short_url(AIR_QUALITY_URL), WEATHER_LAT, WEATHER_LON))
-    aqi_data, err = fetch_json(AIR_QUALITY_URL)
+    aqi_data, err, stale = fetch_json_fallback("aqi", AIR_QUALITY_URL, now)
     if not aqi_data:
         _step_fail("HTTP failed: {}".format(err or "no data"))
     else:
         us_aqi = aqi_data.get("current", {}).get("us_aqi")
         if isinstance(us_aqi, (int, float)):
             p["aqi"] = round(us_aqi)
-            _step_ok("AQI {}".format(p["aqi"]))
+            _report("AQI {}".format(p["aqi"]), stale)
         else:
             _step_fail("us_aqi missing in response")
 
@@ -1391,7 +1882,7 @@ def build_payload():
     _step_req("NOAA Tides",
               "GET {} — station {} (48h hi/lo predictions)".format(
                   _short_url(tide_endpoint), TIDE_STATION_ID))
-    tide_data, err = fetch_json(tide_endpoint)
+    tide_data, err, stale = fetch_json_fallback("tides", tide_endpoint, now)
     if not tide_data:
         _step_fail("HTTP failed: {}".format(err or "no data"))
     else:
@@ -1443,11 +1934,11 @@ def build_payload():
         ev_strs = ["{}{} {:.1f}ft".format(arrow, fmt_time(t_dt.isoformat()), height)
                    for arrow, t_dt, height in events]
         if ev_strs:
-            _step_ok("next {} • {} markers today".format(
-                " / ".join(ev_strs), len(today_tides)))
+            _report("next {} • {} markers today".format(
+                " / ".join(ev_strs), len(today_tides)), stale)
         else:
-            _step_ok("no upcoming events • {} markers today".format(
-                len(today_tides)))
+            _report("no upcoming events • {} markers today".format(
+                len(today_tides)), stale)
 
     # ===== Merge air + ocean forecast into a single per-day card array =====
     # The template renders one combined block per day (day name → AIR block
